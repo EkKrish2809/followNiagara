@@ -188,7 +188,7 @@ uint32_t getGraphicsQueueFamily(VkPhysicalDevice physicalDevice){
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyPropertyCount, queueFamilyProperties);
 
     for (uint32_t i=0; i<queueFamilyPropertyCount; ++i){
-        if (queueFamilyProperties[i].queueFlags == VK_QUEUE_GRAPHICS_BIT){
+        if (queueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT){
             return i;
         }
     }
@@ -507,6 +507,7 @@ int main()
     // create logical device
     uint32_t familyIndex = getGraphicsQueueFamily(physicalDevice);
     VkDevice device = createDevice(instance, physicalDevice, familyIndex);
+    assert(device);
     
     // create window
     GLFWwindow *window = glfwCreateWindow(1024, 768, "Following Niagara", 0, 0);
