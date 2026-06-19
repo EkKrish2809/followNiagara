@@ -1,18 +1,24 @@
 #include <stdio.h>
 #include <assert.h>
 
+#include <vector>
+#include <algorithm>
+
 #include <GLFW/glfw3.h>
 
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
 
 #define VK_USE_PLATFORM_XLIB_KHR
-#include <vulkan/vulkan.h>
+// #include <vulkan/vulkan.h>
+#define VOLK_IMPLEMENTATION
+#include "../include/volk/volk.h"
 
 #include <X11/Xlib.h>
 
-#include <vector>
-#include <algorithm>
+#include "../include/fast_obj/fast_obj.h"
+
+#include "../meshoptimizer/src/meshoptimizer.h"
 
 #define _DEBUG 0
 
@@ -521,6 +527,26 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     createInfo.pStages = stages;
 
     VkPipelineVertexInputStateCreateInfo vertexInputState = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    
+    // TODO : temporary
+    VkVertexInputBindingDescription stream = {0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    
+    VkVertexInputAttributeDescription attrs[3] = {};
+    attrs[0].location = 0;
+    attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[0].offset = 0;
+    attrs[1].location = 1;
+    attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[1].offset = 12;
+    attrs[2].location = 2;
+    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[2].offset = 24;
+    
+    vertexInputState.vertexBindingDescriptionCount = 1;
+    vertexInputState.pVertexBindingDescriptions = &stream;
+    vertexInputState.vertexAttributeDescriptionCount = 3;
+    vertexInputState.pVertexAttributeDescriptions = attrs;
+    
     createInfo.pVertexInputState = &vertexInputState;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -533,16 +559,6 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     createInfo.pViewportState = &viewportStateInfo;
 
     VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    // rasterizationStateCreateInfo.depthClampEnable = VK_FALSE;
-    // rasterizationStateCreateInfo.rasterizerDiscardEnable = VK_FALSE;
-    // rasterizationStateCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
-    // rasterizationStateCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-    // rasterizationStateCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    // rasterizationStateCreateInfo.depthBiasEnable = VK_FALSE;
-    // float                                      depthBiasConstantFactor;
-    // float                                      depthBiasClamp;
-    // float                                      depthBiasSlopeFactor;
-    // float                                      lineWidth;
     rasterizationStateCreateInfo.lineWidth = 1.0f;
 
     createInfo.pRasterizationState = &rasterizationStateCreateInfo;
@@ -676,7 +692,7 @@ void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physic
     uint32_t newWidth = surfaceCaps.currentExtent.width;
     uint32_t newHeight = surfaceCaps.currentExtent.height;
 
-    if (result.width == newWidth || result.height == newHeight)
+    if (result.width == newWidth && result.height == newHeight)
         return;
 
     Swapchain old = result;
@@ -688,16 +704,208 @@ void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physic
     destroySwapchain(device, old);
 }
 
-int main()
+// Day 4 -> Mesh loading
+struct Vertex{
+    float vx, vy, vz;
+    float nx, ny, nz;
+    float tu, tv;
+};
+
+struct Mesh{
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+};
+
+bool loadMesh(Mesh& result, const char* path){
+    fastObjMesh* objMesh = fast_obj_read(path);;
+	if (!objMesh){
+        printf("Can not found the specified OBJ file\n");
+		return false;
+	}
+
+	// size_t index_count = file.f_size / 3;
+	
+	std::vector<Vertex> vertices;
+    vertices.reserve(objMesh->index_count);
+	// std::vector<uint32_t> indices(objMesh->index_count);
+
+    uint32_t indexOffset = 0;   // running offset into mesh->indices[]
+	
+    // Loop over all faces
+    for (unsigned int f = 0; f < objMesh->face_count; f++) {
+        // Get the number of vertices in this face (usually 3 for triangles)
+        unsigned int vertex_count = objMesh->face_vertices[f];
+        
+        // Get the starting index for this face in the indices array
+        // unsigned int index_offset = objMesh->face_offsets[f];
+
+        // Loop over vertices in the face
+        for (unsigned int v = 1; v + 1 < vertex_count; ++v) {
+
+            // The three corners of this triangle within the face
+            uint32_t corners[3] = { 0, v, v + 1 };
+
+            for (uint32_t c : corners){
+                fastObjIndex idx = objMesh->indices[indexOffset + c];
+
+                Vertex vtx{};
+
+                // ── Position ──────────────────────────────────────────────
+                // fast-obj stores positions starting at slot 1 (slot 0 is a
+                // dummy zero-initialised entry).  Each position is 3 floats.
+                if (idx.p > 0) {
+                    vtx.vx = objMesh->positions[3 * idx.p + 0];
+                    vtx.vy = objMesh->positions[3 * idx.p + 1];
+                    vtx.vz = objMesh->positions[3 * idx.p + 2];
+                }
+
+                // ── Normal ────────────────────────────────────────────────
+                if (idx.n > 0) {
+                    vtx.nx = objMesh->normals[3 * idx.n + 0];
+                    vtx.ny = objMesh->normals[3 * idx.n + 1];
+                    vtx.nz = objMesh->normals[3 * idx.n + 2];
+                }
+
+                // ── Texture coordinate ────────────────────────────────────
+                // fast-obj stores UVs as 2 floats per entry.
+                // OBJ convention: V=0 is bottom; Vulkan: V=0 is top.
+                // Flip V so textures appear correctly.
+                if (idx.t > 0) {
+                    vtx.tu =       objMesh->texcoords[2 * idx.t + 0];
+                    vtx.tv = 1.0f - objMesh->texcoords[2 * idx.t + 1]; // flip V
+                }
+
+                // printf("x = %f, y = %f, z = %f\n", vtx.nx, vtx.ny, vtx.nz);
+
+                vertices.push_back(vtx);
+            }
+            
+            // Use px, py, pz, nx, ny, nz, u, v_coord to build your vertex buffer
+        }
+        indexOffset += vertex_count;   // advance past all corners of this face
+    }
+	/*for (size_t i=0; i < index_count; ++i) {
+		Vertex& v = vertices[i];
+
+		int vi = file.f[i * 3 + 0];
+		int vti = file.f[i * 3 + 1];
+		int vni = file.f[i * 3 + 2];
+
+		v.vx = file.v[vi * 3 + 0];
+		v.vy = file.v[vi * 3 + 1];
+		v.vz = file.v[vi * 3 + 2];
+		v.nx = vni < 0 ? 0.f : file.vn[vni * 3 + 0];
+		v.ny = vni < 0 ? 0.f : file.vn[vni * 3 + 1];
+		v.nz = vni < 0 ? 1.f : file.vn[vni * 3 + 2];
+		v.tu = vti < 0 ? 0.f : file.vt[vti * 3 + 0];
+		v.tv = vti < 0 ? 0.f : file.vt[vti * 3 + 1];
+	}*/
+
+	if (0){
+		result.vertices = vertices;
+		result.indices.resize(objMesh->index_count);
+
+		for (size_t i=0; i < objMesh->index_count; ++i){
+			result.indices[i] = (uint32_t)i;
+		}
+	} else {
+		std::vector<uint32_t> remap(objMesh->index_count);
+		size_t vertex_count = meshopt_generateVertexRemap(remap.data(), 0, objMesh->index_count, vertices.data(), objMesh->index_count, sizeof(Vertex));
+
+		result.vertices.resize(vertex_count);
+		result.indices.resize(objMesh->index_count);
+
+		meshopt_remapVertexBuffer(result.vertices.data(), vertices.data(), objMesh->index_count, sizeof(Vertex), remap.data());
+		meshopt_remapIndexBuffer(result.indices.data(), 0, objMesh->index_count, remap.data());
+
+		// TODO : optimize the mesh for more efficient GPU rendering
+	}
+    fast_obj_destroy(objMesh);
+
+    return true;
+}
+
+struct Buffer{
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    void* data;
+    size_t size;
+};
+
+uint32_t selectMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, uint32_t memoryTypeBits, VkMemoryPropertyFlags flags){
+    for (uint32_t i=0; i < memoryProperties.memoryTypeCount; ++i){
+        if ((memoryTypeBits & (1 << i)) != 0 && (memoryProperties.memoryTypes[i].propertyFlags & flags) == flags){
+            return i;
+        }
+    }
+
+    assert(!"No compatible memory type found");
+    return ~0u;
+}
+
+
+
+void createBuffer(Buffer& result, VkDevice device, const VkPhysicalDeviceMemoryProperties& memoryProperties, size_t size, VkBufferUsageFlags usage){
+    // create Vk buffer container without memory
+    VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    createInfo.size = size;
+    createInfo.usage = usage;
+
+    VkBuffer buffer = 0;
+    vkCreateBuffer(device, &createInfo, 0, &buffer);
+
+    // ask memory requirements for the above created buffer to the Vulkan
+    VkMemoryRequirements memoryRequirements;
+    vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+
+    uint32_t memoryTypeIndex = selectMemoryType(memoryProperties, memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    assert(memoryTypeIndex != ~0u);
+
+    VkMemoryAllocateInfo allocateInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocateInfo.allocationSize = memoryRequirements.size;
+    allocateInfo.memoryTypeIndex = memoryTypeIndex;
+
+    VkDeviceMemory deviceMemory = 0;
+    VK_CHECK(vkAllocateMemory(device, &allocateInfo, 0, &deviceMemory));
+
+    VK_CHECK(vkBindBufferMemory(device, buffer, deviceMemory, 0));
+
+    void* data = 0;
+    VK_CHECK(vkMapMemory(device, deviceMemory, 0, size, 0, &data));
+
+    result.buffer = buffer;
+    result.data = data;
+    result.memory = deviceMemory;
+    result.size = size;
+}
+
+void destroyBuffer(const Buffer& buffer, VkDevice device){
+    vkFreeMemory(device, buffer.memory, 0);
+    vkDestroyBuffer(device, buffer.buffer, 0);
+}
+
+
+int main(int argc, const char** argv)
 {
+	if (argc < 2){
+		printf("Usage : %s [mesh]\n", argv[0]);
+		return 1;
+	}
+
     VkLogFile = fopen("validation.log", "wa");
     assert(VkLogFile);
 
     int ret = glfwInit();
     assert(ret);
 
+    VK_CHECK(volkInitialize());
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+
     VkInstance instance = createInstance();
     assert(instance);
+
+    volkLoadInstance(instance);
 
     // enable validation layer output
     createDebugCallback(instance);
@@ -777,6 +985,25 @@ int main()
     VkCommandBuffer commandBuffers = 0;
     VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &commandBuffers));
 
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+	// Mesh loading code
+	Mesh mesh;
+	bool rcm = loadMesh(mesh, argv[1]);
+
+    Buffer vb = {};
+    createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    Buffer ib = {};
+    createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+    assert(vb.size >= mesh.vertices.size() * sizeof(Vertex));
+    memcpy(vb.data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+
+    assert(ib.size >= mesh.indices.size() * sizeof(uint32_t));
+    memcpy(ib.data, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t));
+
+
     fprintf(VkLogFile, "\n==================================================================================================================\n");
     fprintf(VkLogFile, "Begin Rendering");
     fprintf(VkLogFile, "\n==================================================================================================================\n");
@@ -824,7 +1051,12 @@ int main()
 
         // draw calls go here
         vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
-        vkCmdDraw(commandBuffers, 3, 1, 0, 0);
+
+        VkDeviceSize dummyOffset = 0;
+        vkCmdBindVertexBuffers(commandBuffers, 0, 1, &vb.buffer, &dummyOffset);
+        vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(commandBuffers, mesh.indices.size(), 1, 0, 0, 0);
+        // vkCmdDraw(commandBuffers, 3, 1, 0, 0);
 
         vkCmdEndRenderPass(commandBuffers);
 
@@ -868,6 +1100,9 @@ int main()
 
     VK_CHECK(vkDeviceWaitIdle(device));
 
+    destroyBuffer(vb, device);
+    destroyBuffer(ib, device);
+
     glfwDestroyWindow(window);
 
     vkFreeCommandBuffers(device, commandPool, 1, &commandBuffers);
@@ -899,5 +1134,5 @@ int main()
         fclose(VkLogFile);
         VkLogFile = NULL;
     }
-    return 0;
+    return (0);
 }
