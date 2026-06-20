@@ -274,13 +274,30 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
 
     const char *extensions[] = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+        VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+        VK_KHR_8BIT_STORAGE_EXTENSION_NAME
     };
+
+    // Adding features 2 for enabling 8 bit data type access in shaders
+    VkPhysicalDeviceFeatures2 features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.features.vertexPipelineStoresAndAtomics = true;
+
+    VkPhysicalDevice16BitStorageFeatures feature16 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
+    feature16.storageBuffer16BitAccess = true;
+
+    VkPhysicalDevice8BitStorageFeaturesKHR features8 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR};
+    features8.storageBuffer8BitAccess = true;
 
     VkDeviceCreateInfo pDeviceCreateInfo = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     pDeviceCreateInfo.queueCreateInfoCount = 1;
     pDeviceCreateInfo.pQueueCreateInfos = &queueInfo;
     pDeviceCreateInfo.ppEnabledExtensionNames = extensions;
     pDeviceCreateInfo.enabledExtensionCount = sizeof(extensions) / sizeof(extensions[0]);
+    // pDeviceCreateInfo.pEnabledFeatures = &features;
+    pDeviceCreateInfo.pNext = &features;
+    features.pNext = &feature16;
+    feature16.pNext = &features8;
 
     VkDevice device = 0;
     VK_CHECK(vkCreateDevice(physicalDevice, &pDeviceCreateInfo, 0, &device));
@@ -498,10 +515,30 @@ VkShaderModule loadShader(VkDevice device, const char *path)
 
 VkPipelineLayout createPipelineLayout(VkDevice device)
 {
+    VkDescriptorSetLayoutBinding setBindings[1] = {};
+    setBindings[0].binding = 0;
+    setBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    setBindings[0].descriptorCount = 1;
+    setBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo setCreateInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    setCreateInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    setCreateInfo.bindingCount = ARRAYSIZE(setBindings);
+    setCreateInfo.pBindings = setBindings;
+
+    VkDescriptorSetLayout setLayout = 0;
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &setCreateInfo, 0, &setLayout));
 
     VkPipelineLayoutCreateInfo createInfo = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    createInfo.setLayoutCount = 1;
+    createInfo.pSetLayouts = &setLayout;
+
     VkPipelineLayout layout = 0;
     VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));
+
+
+    // TODO : Is this safe?
+    // vkDestroyDescriptorSetLayout(device, setLayout, 0);
 
     return layout;
 }
@@ -529,7 +566,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     VkPipelineVertexInputStateCreateInfo vertexInputState = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     
     // TODO : temporary
-    VkVertexInputBindingDescription stream = {0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
+    /*VkVertexInputBindingDescription stream = {0, 32, VK_VERTEX_INPUT_RATE_VERTEX};
     
     VkVertexInputAttributeDescription attrs[3] = {};
     attrs[0].location = 0;
@@ -545,7 +582,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     vertexInputState.vertexBindingDescriptionCount = 1;
     vertexInputState.pVertexBindingDescriptions = &stream;
     vertexInputState.vertexAttributeDescriptionCount = 3;
-    vertexInputState.pVertexAttributeDescriptions = attrs;
+    vertexInputState.pVertexAttributeDescriptions = attrs;*/
     
     createInfo.pVertexInputState = &vertexInputState;
 
@@ -707,7 +744,7 @@ void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physic
 // Day 4 -> Mesh loading
 struct Vertex{
     float vx, vy, vz;
-    float nx, ny, nz;
+    uint8_t nx, ny, nz, nw;
     float tu, tv;
 };
 
@@ -761,9 +798,13 @@ bool loadMesh(Mesh& result, const char* path){
 
                 // ── Normal ────────────────────────────────────────────────
                 if (idx.n > 0) {
-                    vtx.nx = objMesh->normals[3 * idx.n + 0];
-                    vtx.ny = objMesh->normals[3 * idx.n + 1];
-                    vtx.nz = objMesh->normals[3 * idx.n + 2];
+                    float nx = objMesh->normals[3 * idx.n + 0];
+                    float ny = objMesh->normals[3 * idx.n + 1];
+                    float nz = objMesh->normals[3 * idx.n + 2];
+                    // TODO : fix rounding
+                    vtx.nx = uint8_t(nx * 127.f + 127.f);
+                    vtx.ny = uint8_t(ny * 127.f + 127.f);
+                    vtx.nz = uint8_t(nz * 127.f + 127.f);
                 }
 
                 // ── Texture coordinate ────────────────────────────────────
@@ -993,7 +1034,7 @@ int main(int argc, const char** argv)
 	bool rcm = loadMesh(mesh, argv[1]);
 
     Buffer vb = {};
-    createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     Buffer ib = {};
     createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
@@ -1052,11 +1093,25 @@ int main(int argc, const char** argv)
         // draw calls go here
         vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
 
-        VkDeviceSize dummyOffset = 0;
-        vkCmdBindVertexBuffers(commandBuffers, 0, 1, &vb.buffer, &dummyOffset);
+
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = vb.buffer;
+        bufferInfo.offset = 0;
+        bufferInfo.range = vb.size;
+
+        VkWriteDescriptorSet descriptors[1] = {};
+        descriptors[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptors[0].dstBinding = 0;
+        descriptors[0].descriptorCount = 1;
+        descriptors[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptors[0].pBufferInfo = &bufferInfo;
+
+        vkCmdPushDescriptorSetKHR(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, triangleLayout, 0, ARRAYSIZE(descriptors), descriptors);
+
+        // VkDeviceSize dummyOffset = 0;
+        // vkCmdBindVertexBuffers(commandBuffers, 0, 1, &vb.buffer, &dummyOffset);
         vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(commandBuffers, mesh.indices.size(), 1, 0, 0, 0);
-        // vkCmdDraw(commandBuffers, 3, 1, 0, 0);
+        vkCmdDrawIndexed(commandBuffers, uint32_t(mesh.indices.size()), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(commandBuffers);
 
