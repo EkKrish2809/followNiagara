@@ -1,4 +1,4 @@
 # ignore to commit the following files
 *.out
 *.log
-*.spv
+*.*.spv

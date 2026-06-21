@@ -1,0 +1,56 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Compile Shaders",
+            "type": "shell",
+            "command": "glslc src/shaders/mesh.vert -o src/shaders/mesh.vert.spv && glslc src/shaders/meshlet.mesh -o src/shaders/meshlet.mesh.spv && glslc src/shaders/mesh.frag -o src/shaders/mesh.frag.spv && glslc src/shaders/meshfvf.vert -o src/shaders/meshfvf.vert.spv",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared",
+                "clear": true
+            },
+            "detail": "Compile GLSL shaders to SPIR-V"
+        },
+        {
+            "label": "Build Niagara",
+            "type": "shell",
+            "command": "g++ src/niagara.cpp include/fast_obj/fast_obj.c meshoptimizer/src/*.cpp -g3 -o ${workspaceFolder}/a.out -lglfw -lvulkan -lX11",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Compile Shaders",
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "detail": "Compile and link niagara into a.out"
+        },
+        {
+            "label": "Run Niagara",
+            "type": "shell",
+            "command": "./a.out asset/kitten.obj",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "Build Niagara",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "detail": "Build then run (no debugger)"
+        }
+    ]
+}

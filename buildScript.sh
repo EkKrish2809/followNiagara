@@ -1,8 +1,10 @@
 rm ./a.out
 
-glslc src/triangle.vert -o src/triangle.vert.spv
+glslc src/shaders/mesh.vert -o src/shaders/mesh.vert.spv
 
-glslc src/triangle.frag -o src/triangle.frag.spv
+glslc src/shaders/meshlet.mesh -o src/shaders/meshlet.mesh.spv
+
+glslc src/shaders/mesh.frag -o src/shaders/mesh.frag.spv
 
 FILES=(
     src/niagara.cpp
