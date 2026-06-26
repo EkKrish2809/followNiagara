@@ -5,7 +5,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types: require
 
 struct Vertex{
-    float16_t vx, vy, vz;
+    float16_t vx, vy, vz, vw;
     uint8_t nx, ny, nz, nw;
     float16_t tu, tv;
 };
