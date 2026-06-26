@@ -8,6 +8,7 @@ glslc src/shaders/mesh.frag -o src/shaders/mesh.frag.spv
 
 FILES=(
     src/niagara.cpp
+    src/shaders.cpp
 
     # include/volk/volk.c
     include/fast_obj/fast_obj.c

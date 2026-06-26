@@ -19,7 +19,7 @@
         {
             "label": "Build Niagara",
             "type": "shell",
-            "command": "g++ src/niagara.cpp include/fast_obj/fast_obj.c meshoptimizer/src/*.cpp -g3 -o ${workspaceFolder}/a.out -lglfw -lvulkan -lX11",
+            "command": "g++ src/*.cpp include/fast_obj/fast_obj.c meshoptimizer/src/*.cpp -g3 -o ${workspaceFolder}/a.out -lglfw -lvulkan -lX11",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
