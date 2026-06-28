@@ -293,6 +293,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     // this will only be used when RTX supports mesh shader
     VkPhysicalDeviceMeshShaderFeaturesNV featureMesh = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV};
     featureMesh.meshShader = true;
+    featureMesh.taskShader = true;
 
     VkDeviceCreateInfo pDeviceCreateInfo = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     pDeviceCreateInfo.queueCreateInfoCount = 1;
@@ -629,6 +630,7 @@ struct alignas(16) Meshlet{
     uint8_t indices[126 * 3];   // up to 126 triangles
     uint8_t triangleCount;
     uint8_t vertexCount;
+
 };
 
 struct Vertex{
@@ -806,6 +808,11 @@ void buildMeshlets(Mesh& mesh){
 
     if (meshlet.triangleCount)
         mesh.meshlets.push_back(meshlet);
+
+    // TODO: we don't really need this but it makes sure we can assume that we need all 32 meshlets in task shader
+    while(mesh.meshlets.size() % 32){
+        mesh.meshlets.push_back(Meshlet());
+    }
 }
 
 float halfToFloat(uint16_t v){
@@ -1085,21 +1092,27 @@ int main(int argc, const char** argv)
     VkRenderPass renderPass = createRenderPass(device, swapchainFormat);
     assert(renderPass);
 
+    bool rcs = false;
     // shader module
-    Shader meshletVS = {};
-    if (rtxSupported){
-        bool rc = loadShader(meshletVS, device, "src/shaders/meshlet.mesh.spv");
-        assert(rc);
-    } 
-
     Shader meshVS = {};
-    bool rc = loadShader(meshVS, device, "src/shaders/mesh.vert.spv");
-    assert(rc);
+    rcs = loadShader(meshVS, device, "src/shaders/mesh.vert.spv");
+    assert(rcs);
 
     Shader meshFS = {};
-    rc = loadShader(meshFS, device, "src/shaders/mesh.frag.spv");
-    assert(rc);
+    rcs = loadShader(meshFS, device, "src/shaders/mesh.frag.spv");
+    assert(rcs);
 
+    Shader meshletMS = {};
+    Shader meshletTS = {};
+    if (rtxSupported){
+        rcs = loadShader(meshletMS, device, "src/shaders/meshlet.mesh.spv");
+        assert(rcs);
+
+        rcs = loadShader(meshletTS, device, "src/shaders/meshlet.task.spv");
+        assert(rcs);
+    } 
+
+    
     // graphics pipeline layout
     VkPipelineLayout meshLayout = createPipelineLayout(device, { &meshVS, &meshFS });
     assert(meshLayout);
@@ -1111,10 +1124,10 @@ int main(int argc, const char** argv)
     VkPipelineLayout meshLayoutRTX = 0;
     VkDescriptorUpdateTemplate meshUpdateTemplateRTX = 0;
     if (rtxSupported){
-         meshLayoutRTX = createPipelineLayout(device, { &meshletVS, &meshFS });
+         meshLayoutRTX = createPipelineLayout(device, { &meshletTS, &meshletMS, &meshFS });
         assert(meshLayoutRTX);
 
-        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, { &meshletVS, &meshFS} );
+        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, { &meshletTS, &meshletMS, &meshFS} );
         assert(meshUpdateTemplateRTX);
     }
 
@@ -1125,7 +1138,7 @@ int main(int argc, const char** argv)
 
     VkPipeline meshPipelineRTX = 0;
     if (rtxSupported){
-        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, {&meshletVS, &meshFS}, meshLayoutRTX);
+        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, { &meshletTS, &meshletMS, &meshFS}, meshLayoutRTX);
         assert(meshPipelineRTX);
     }
 
@@ -1249,7 +1262,7 @@ int main(int argc, const char** argv)
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshUpdateTemplateRTX, meshLayoutRTX, 0, descriptors);
             
             for (uint32_t i=0; i < drawCount; ++i)
-                vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()), 0);
+                vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()) / 32, 0);
         }
         else {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
@@ -1356,7 +1369,8 @@ int main(int argc, const char** argv)
     destroyShaderModule(meshVS, device);
 
     if (rtxSupported) {
-        destroyShaderModule(meshletVS, device);
+        destroyShaderModule(meshletTS, device);
+        destroyShaderModule(meshletMS, device);
     }
 
     vkDestroyRenderPass(device, renderPass, 0);

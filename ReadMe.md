@@ -1,3 +1,6 @@
+* Compile C++ to SPIR-V. eliminate shaders ??
+https://www.youtube.com/watch?v=g3tTUzPmHwM
+====================================================================================================================
 Application Layout
 
 # 1. 
