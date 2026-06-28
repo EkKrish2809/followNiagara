@@ -1101,31 +1101,31 @@ int main(int argc, const char** argv)
     assert(rc);
 
     // graphics pipeline layout
-    VkPipelineLayout meshLayout = createPipelineLayout(device, meshVS, meshFS);
+    VkPipelineLayout meshLayout = createPipelineLayout(device, { &meshVS, &meshFS });
     assert(meshLayout);
 
     // create descriptor update template
-    VkDescriptorUpdateTemplate meshUpdateTemplate = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, meshVS, meshFS );
+    VkDescriptorUpdateTemplate meshUpdateTemplate = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, { &meshVS, &meshFS } );
     assert(meshUpdateTemplate);
 
     VkPipelineLayout meshLayoutRTX = 0;
     VkDescriptorUpdateTemplate meshUpdateTemplateRTX = 0;
     if (rtxSupported){
-         meshLayoutRTX = createPipelineLayout(device, meshletVS, meshFS);
+         meshLayoutRTX = createPipelineLayout(device, { &meshletVS, &meshFS });
         assert(meshLayoutRTX);
 
-        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, meshletVS, meshFS );
+        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, { &meshletVS, &meshFS} );
         assert(meshUpdateTemplateRTX);
     }
 
     // create graphics pipeline
     VkPipelineCache pipelineCache = 0;
-    VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, meshVS, meshFS, meshLayout);
+    VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, {&meshVS, &meshFS}, meshLayout);
     assert(meshPipeline);
 
     VkPipeline meshPipelineRTX = 0;
     if (rtxSupported){
-        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, meshletVS, meshFS, meshLayoutRTX);
+        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, {&meshletVS, &meshFS}, meshLayoutRTX);
         assert(meshPipelineRTX);
     }
 
@@ -1240,7 +1240,7 @@ int main(int argc, const char** argv)
         vkCmdSetScissor(commandBuffers, 0, 1, &scissor);
 
         // draw calls go here
-        
+        uint32_t drawCount = 1;
 
         if (rtxEnabled){
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineRTX);
@@ -1248,7 +1248,8 @@ int main(int argc, const char** argv)
             DescriptorInfo descriptors[] = {vb.buffer, mb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshUpdateTemplateRTX, meshLayoutRTX, 0, descriptors);
             
-            vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()), 0);
+            for (uint32_t i=0; i < drawCount; ++i)
+                vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()), 0);
         }
         else {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
@@ -1257,7 +1258,9 @@ int main(int argc, const char** argv)
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshUpdateTemplate, meshLayout, 0, descriptors);
 
             vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(commandBuffers, uint32_t(mesh.indices.size()), 1, 0, 0, 0);
+
+            for (uint32_t i=0; i < drawCount; ++i)
+                vkCmdDrawIndexed(commandBuffers, uint32_t(mesh.indices.size()), 1, 0, 0, 0);
             
         }
         vkCmdEndRenderPass(commandBuffers);

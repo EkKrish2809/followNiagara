@@ -10,9 +10,11 @@ struct Shader {
 bool loadShader(Shader& shader, VkDevice device, const char *path);
 void destroyShaderModule(Shader& shader, VkDevice device);
 
-VkPipelineLayout createPipelineLayout(VkDevice device,  const Shader& VS, const Shader& FS);
-VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout,  const Shader& VS, const Shader& FS);
-VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, const Shader& VS, const Shader& FS, VkPipelineLayout layout);
+using Shaders = std::initializer_list<const Shader*>;
+
+VkPipelineLayout createPipelineLayout(VkDevice device,  Shaders shaders);
+VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout,  Shaders shaders);
+VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, Shaders shaders, VkPipelineLayout layout);
 
 
 struct DescriptorInfo {
