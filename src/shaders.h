@@ -1,9 +1,18 @@
 #pragma once
 
-VkShaderModule loadShader(VkDevice device, const char *path);
-VkPipelineLayout createPipelineLayout(VkDevice device, bool rtxEnabled);
-VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout, bool rtxEnabled);
-VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, VkShaderModule VS, VkShaderModule FS, VkPipelineLayout layout, bool rtxEnabled);
+struct Shader {
+    VkShaderModule module;
+    VkShaderStageFlagBits stage;
+
+    uint32_t storageBufferMask;
+};
+
+bool loadShader(Shader& shader, VkDevice device, const char *path);
+void destroyShaderModule(Shader& shader, VkDevice device);
+
+VkPipelineLayout createPipelineLayout(VkDevice device,  const Shader& VS, const Shader& FS);
+VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout,  const Shader& VS, const Shader& FS);
+VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, const Shader& VS, const Shader& FS, VkPipelineLayout layout);
 
 
 struct DescriptorInfo {
@@ -13,6 +22,8 @@ struct DescriptorInfo {
         VkDescriptorBufferInfo bufferInfo;
     };
 
+    DescriptorInfo(){}
+    
     DescriptorInfo(VkSampler sampler, VkImageView imageView, VkImageLayout imageLayout){
         imageInfo.sampler = sampler;
         imageInfo.imageView = imageView;

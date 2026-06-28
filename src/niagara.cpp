@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <math.h>
 
 #include <GLFW/glfw3.h>
 
@@ -622,7 +623,8 @@ VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
 // Day 4 -> Mesh loading
 
 // For mesh shader
-struct Meshlet{
+struct alignas(16) Meshlet{
+    float cone[4];
     uint32_t vertices[64];
     uint8_t indices[126 * 3];   // up to 126 triangles
     uint8_t triangleCount;
@@ -804,6 +806,90 @@ void buildMeshlets(Mesh& mesh){
 
     if (meshlet.triangleCount)
         mesh.meshlets.push_back(meshlet);
+}
+
+float halfToFloat(uint16_t v){
+    uint16_t sign = v >> 15;
+    uint16_t exp = (v >> 10) & 31;
+    uint16_t mant = v & 1023;
+
+    assert(exp != 31);
+
+    if (exp == 0){
+        assert(mant == 0);
+        return 0.f;
+    } else {
+        return (sign ? -1.f : 1.f) * ldexpf(float(mant + 1024) / 1024.f, exp -15);
+    }
+}
+
+void buildMeshletCones(Mesh& mesh){
+
+    for (Meshlet& meshlet : mesh.meshlets){
+        
+        float normals[126][6] = {};
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            unsigned int a = meshlet.indices[i * 3 + 0];
+            unsigned int b = meshlet.indices[i * 3 + 1];
+            unsigned int c = meshlet.indices[i * 3 + 2];
+
+            const Vertex& va = mesh.vertices[meshlet.vertices[a]];
+            const Vertex& vb = mesh.vertices[meshlet.vertices[b]];
+            const Vertex& vc = mesh.vertices[meshlet.vertices[c]];
+
+            float p0[3] = {halfToFloat(va.vx), halfToFloat(va.vy), halfToFloat(va.vz)};
+            float p1[3] = {halfToFloat(vb.vx), halfToFloat(vb.vy), halfToFloat(vb.vz)};
+            float p2[3] = {halfToFloat(vc.vx), halfToFloat(vc.vy), halfToFloat(vc.vz)};
+
+            float p10[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+            float p20[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+
+            float normalx = p10[1] * p20[2] - p10[2] * p20[1];
+            float normaly = p10[2] * p20[0] - p10[0] * p20[2];
+            float normalz = p10[0] * p20[1] - p10[1] * p20[0];
+
+            float area = sqrtf(normalx * normalx + normaly * normaly + normalz * normalz);
+            float invarea = area == 0.f ? 0.f : 1 / area;
+
+            normals[i][0] = normalx * invarea;
+            normals[i][1] = normaly * invarea;
+            normals[i][2] = normalz * invarea;
+        }
+
+        float avgnormal[3] = {};
+
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            avgnormal[0] += normals[i][0];
+            avgnormal[1] += normals[i][1];
+            avgnormal[2] += normals[i][2];
+        }
+
+        float avglength = sqrtf(avgnormal[0] * avgnormal[0] + avgnormal[1] * avgnormal[1] + avgnormal[2] * avgnormal[2]);
+        if (avglength == 0.f) {
+            avgnormal[0] = 1.f;
+            avgnormal[1] = 0.f;
+            avgnormal[2] = 0.f;
+        } else {
+            avgnormal[0] /= avglength;
+            avgnormal[1] /= avglength;
+            avgnormal[2] /= avglength;
+        }
+
+        float mindp = 1.f;
+
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            float dp = normals[i][0] * avgnormal[0] + normals[i][1] * avgnormal[1] + normals[i][2] * avgnormal[2];
+
+            mindp = std::min(mindp, dp);
+        }
+
+        float conew = mindp <= 0.f ? 1 : sqrtf(1 - mindp * mindp);
+
+        meshlet.cone[0] = avgnormal[0];
+        meshlet.cone[1] = avgnormal[1];
+        meshlet.cone[2] = avgnormal[2];
+        meshlet.cone[3] = conew;
+    }
 }
 
 struct Buffer{
@@ -1000,44 +1086,46 @@ int main(int argc, const char** argv)
     assert(renderPass);
 
     // shader module
-    VkShaderModule meshletVS = 0;
+    Shader meshletVS = {};
     if (rtxSupported){
-        meshletVS = loadShader(device, "src/shaders/meshlet.mesh.spv");
-        assert(meshletVS);
+        bool rc = loadShader(meshletVS, device, "src/shaders/meshlet.mesh.spv");
+        assert(rc);
     } 
 
-    VkShaderModule meshVS = loadShader(device, "src/shaders/mesh.vert.spv");
-    assert(meshVS);
+    Shader meshVS = {};
+    bool rc = loadShader(meshVS, device, "src/shaders/mesh.vert.spv");
+    assert(rc);
 
-    VkShaderModule meshFS = loadShader(device, "src/shaders/mesh.frag.spv");
-    assert(meshFS);
+    Shader meshFS = {};
+    rc = loadShader(meshFS, device, "src/shaders/mesh.frag.spv");
+    assert(rc);
 
     // graphics pipeline layout
-    VkPipelineLayout meshLayout = createPipelineLayout(device, /* rtxEnables*/ false);
+    VkPipelineLayout meshLayout = createPipelineLayout(device, meshVS, meshFS);
     assert(meshLayout);
 
     // create descriptor update template
-    VkDescriptorUpdateTemplate meshUpdateTemplate = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, /*rtxEnabled*/ false );
+    VkDescriptorUpdateTemplate meshUpdateTemplate = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, meshVS, meshFS );
     assert(meshUpdateTemplate);
 
     VkPipelineLayout meshLayoutRTX = 0;
     VkDescriptorUpdateTemplate meshUpdateTemplateRTX = 0;
     if (rtxSupported){
-         meshLayoutRTX = createPipelineLayout(device, /* rtxEnables*/ true);
+         meshLayoutRTX = createPipelineLayout(device, meshletVS, meshFS);
         assert(meshLayoutRTX);
 
-        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, /*rtxEnabled*/ true );
+        meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, meshletVS, meshFS );
         assert(meshUpdateTemplateRTX);
     }
 
     // create graphics pipeline
     VkPipelineCache pipelineCache = 0;
-    VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, meshVS, meshFS, meshLayout, /* rtxSupported*/ false);
+    VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, meshVS, meshFS, meshLayout);
     assert(meshPipeline);
 
     VkPipeline meshPipelineRTX = 0;
     if (rtxSupported){
-        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, meshletVS, meshFS, meshLayoutRTX, /* rtxSupported*/ true);
+        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, meshletVS, meshFS, meshLayoutRTX);
         assert(meshPipelineRTX);
     }
 
@@ -1070,6 +1158,7 @@ int main(int argc, const char** argv)
 
     if (rtxSupported){
         buildMeshlets(mesh);
+        buildMeshletCones(mesh);
     }
 
     Buffer scratch = {};
@@ -1260,11 +1349,11 @@ int main(int argc, const char** argv)
         vkDestroyPipelineLayout(device, meshLayoutRTX, 0);
     }
 
-    vkDestroyShaderModule(device, meshFS, 0);
-    vkDestroyShaderModule(device, meshVS, 0);
+    destroyShaderModule(meshFS, device);
+    destroyShaderModule(meshVS, device);
 
     if (rtxSupported) {
-        vkDestroyShaderModule(device, meshletVS, 0);
+        destroyShaderModule(meshletVS, device);
     }
 
     vkDestroyRenderPass(device, renderPass, 0);
