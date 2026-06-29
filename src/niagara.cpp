@@ -1255,7 +1255,7 @@ int main(int argc, const char** argv)
         // draw calls go here
         uint32_t drawCount = 1;
 
-        if (rtxEnabled){
+        if (rtxSupported && rtxEnabled){
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineRTX);
 
             DescriptorInfo descriptors[] = {vb.buffer, mb.buffer};
