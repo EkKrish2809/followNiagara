@@ -6,11 +6,15 @@ struct Vertex{
 
 struct Meshlet{
     vec4 cone;
-    uint vertices[64];
-    uint8_t indices[124*3];   // up to 126 triangles
-    // uint indicesPacked[124*3/4];   // up to 126 triangles
-    // uint32_t vertexOffset;  // offset into Mesh::meshletVertices
-    // uint32_t triangleOffset; // offset into Mesh::meshletTriangles
-    uint8_t triangleCount;
+    uint dataOffset;
     uint8_t vertexCount;
+    uint8_t triangleCount;
+    // uint vertices[64];
+    // // uint8_t indices[124*3];   // up to 126 triangles
+    // uint indicesPacked[124*3/4];   // up to 126 triangles
+};
+
+struct MeshDraw{
+    vec2 offset;
+    vec2 scale;
 };

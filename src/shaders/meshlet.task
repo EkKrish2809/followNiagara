@@ -19,6 +19,10 @@ layout(binding=1) readonly buffer Meshlets{
     Meshlet meshlets[];
 };
 
+layout(binding=2) readonly buffer MeshletData{
+    uint meshletData[];
+};
+
 out taskNV block {
     uint meshletIndices[32];
 };

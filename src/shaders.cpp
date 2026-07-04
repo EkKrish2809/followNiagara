@@ -224,13 +224,22 @@ VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device, VkPipelineBindP
     return updateTemplate;
 }
 
-VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders)
+VkPipelineLayout createPipelineLayout(VkDevice device, Shaders shaders, size_t pushConstantSize)
 {
     VkDescriptorSetLayout setLayout = createSetLayout(device, shaders);
 
     VkPipelineLayoutCreateInfo createInfo = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     createInfo.setLayoutCount = 1;
     createInfo.pSetLayouts = &setLayout;
+
+    VkPushConstantRange pushConstRange = {};
+    if (pushConstantSize){
+        pushConstRange.stageFlags = VK_SHADER_STAGE_ALL;
+        pushConstRange.size = pushConstantSize;
+
+        createInfo.pushConstantRangeCount = 1;
+        createInfo.pPushConstantRanges = &pushConstRange;
+    }
 
     VkPipelineLayout layout = 0;
     VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));

@@ -25,7 +25,7 @@
 
 #define RTX 0
 
-
+#define VSYNC 0
 
 bool rtxEnabled = false;
 
@@ -392,7 +392,7 @@ VkSwapchainKHR createSwapchain(VkPhysicalDevice physicalDevice, VkDevice device,
     // createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     createInfo.preTransform = surfaceCaps.currentTransform;
     createInfo.compositeAlpha = surfaceComposite;
-    createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    createInfo.presentMode = VSYNC ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
     createInfo.oldSwapchain = oldSwapchain;
 
     VkSwapchainKHR swapchain = 0;
@@ -626,13 +626,17 @@ VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
 // For mesh shader
 struct alignas(16) Meshlet{
     float cone[4];
-    uint32_t vertices[64];
-    uint8_t indices[124] [3];   // up to 126 triangles
-    // uint32_t vertexOffset;   // offset into Mesh::meshletVertices
-    // uint32_t triangleOffset; // offset into Mesh::meshletTriangles
-    uint8_t triangleCount;
+    // uint32_t vertices[64];
+    // uint8_t indices[124] [3];   // up to 126 triangles
+    uint32_t dataOffset;    // dataOffset... dataOffset+vertexCount-1 stores vertex indices, we store indices packed in 4b units after that
     uint8_t vertexCount;
+    uint8_t triangleCount;
 
+};
+
+struct alignas(16) MeshDraw{
+    float offset[2];
+    float scale[2];
 };
 
 struct Vertex{
@@ -646,9 +650,7 @@ struct Mesh{
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Meshlet> meshlets;
-
-    std::vector<uint32_t> meshletVertices;    // shared pool: global vertex indices
-    std::vector<uint8_t>  meshletTriangles;   // shared pool: local triangle indices (3 bytes each, no padding)
+    std::vector<uint32_t> meshletdata;
 };
 
 bool loadMesh(Mesh& result, const char* path){
@@ -740,14 +742,6 @@ bool loadMesh(Mesh& result, const char* path){
 		v.tv = vti < 0 ? 0.f : file.vt[vti * 3 + 1];
 	}*/
 
-	// if (0){
-	// 	result.vertices = vertices;
-	// 	result.indices.resize(objMesh->index_count);
-
-	// 	for (size_t i=0; i < objMesh->index_count; ++i){
-	// 		result.indices[i] = (uint32_t)i;
-	// 	}
-	// } else {
 		std::vector<uint32_t> remap(objMesh->index_count);
 		size_t vertex_count = meshopt_generateVertexRemap(remap.data(), 0, objMesh->index_count, vertices.data(), objMesh->index_count, sizeof(Vertex));
 
@@ -756,9 +750,6 @@ bool loadMesh(Mesh& result, const char* path){
 
 		meshopt_remapVertexBuffer(result.vertices.data(), vertices.data(), objMesh->index_count, sizeof(Vertex), remap.data());
 		meshopt_remapIndexBuffer(result.indices.data(), 0, objMesh->index_count, remap.data());
-
-		// TODO : optimize the mesh for more efficient GPU rendering
-	// }
 
     if (1){
         meshopt_optimizeVertexCache(result.indices.data(), result.indices.data(), objMesh->index_count, vertex_count);
@@ -786,7 +777,7 @@ float halfToFloat(uint16_t v){
     }
 }
 
-
+/*
 void buildMeshlets(Mesh& mesh){
 
     // size_t max_vertices = 64;
@@ -915,13 +906,14 @@ void buildMeshlets(Mesh& mesh){
         meshlet.cone[3] = conew;
     }
 }
+*/
 
 // TODO : writing this function here like this for now, but needs to correctly map to latest meshoptimizer API's
 // if it is already to the latest API, merge it to above buildMeshlets() function 
 void buildMeshletsOpt(Mesh& mesh){
     size_t max_vertices = 64;
     size_t max_triangles = 124;
-    const float cone_weight = 0.5f;   // balance cluster size vs cone culling quality
+    const float cone_weight = 0.0f;   // balance cluster size vs cone culling quality
 
     size_t maxMeshlets = meshopt_buildMeshletsBound(mesh.indices.size(), max_vertices, max_triangles);
 
@@ -945,38 +937,31 @@ void buildMeshletsOpt(Mesh& mesh){
         cone_weight);
 
     meshlets.resize(meshletCount);
-    mesh.meshlets.resize(meshletCount);
+    mesh.meshlets.clear();
+    mesh.meshlets.reserve(meshletCount);
 
     while (meshlets.size() % 32)
         meshlets.push_back(meshopt_Meshlet{});
     
-    // for (auto& meshlet : meshlets){
     for (size_t i = 0; i < meshletCount; ++i){
-        Meshlet m = {};
-
-        // memcpy(m.vertices, mo_vertices.data(), sizeof(m.vertices));
-        // memcpy(m.indices, mesh.indices.data(), sizeof(m.indices));
-        // // memcpy(m.indices, meshlet.indices.data(), sizeof(m.indices));
-        // m.triangleCount = meshlet.triangle_count;
-        // m.vertexCount = meshlet.vertex_count;
+       
         const meshopt_Meshlet& src = meshlets[i];
-        Meshlet& dst = mesh.meshlets[i];
-
-        dst.vertexCount = src.vertex_count;
-        dst.triangleCount = src.triangle_count;
+        size_t dataOffset = mesh.meshletdata.size();
 
         // Copy vertices
-        for (unsigned int j = 0; j < src.vertex_count; ++j)
-        {
-            dst.vertices[j] = mo_vertices[src.vertex_offset + j];
+        for (unsigned int j = 0; j < src.vertex_count; ++j){
+            // dst.vertices[j] = mo_vertices[src.vertex_offset + j];
+            mesh.meshletdata.push_back(mo_vertices[src.vertex_offset + j]);
         }
 
-        // Copy triangle indices
-        for (unsigned int j = 0; j < src.triangle_count; ++j)
-        {
-            dst.indices[j][0] = mo_triangles[src.triangle_offset + j * 3 + 0];
-            dst.indices[j][1] = mo_triangles[src.triangle_offset + j * 3 + 1];
-            dst.indices[j][2] = mo_triangles[src.triangle_offset + j * 3 + 2];
+        const uint8_t* triangleData = mo_triangles.data() + src.triangle_offset;
+        unsigned int indexGroupCount = (src.triangle_count * 3 + 3) / 4;
+
+        for (unsigned int j = 0; j < indexGroupCount; ++j){
+            uint32_t packed = 0;
+            unsigned int count = std::min<unsigned int>(4, src.triangle_count * 3 - j * 4);
+            memcpy(&packed, triangleData + j * 4, count);
+            mesh.meshletdata.push_back(packed);
         }
 
         meshopt_Bounds bounds = meshopt_computeMeshletBounds(
@@ -987,24 +972,25 @@ void buildMeshletsOpt(Mesh& mesh){
             mesh.vertices.size(),
             sizeof(Vertex));
 
-        // zeroarea += (bounds.cone_w >= 1.0f);   // degenerate meshlet, no valid cone
+        // Meshlet& dst = mesh.meshlets[i];
+        Meshlet dst = {};
 
+        dst.dataOffset = uint32_t(dataOffset);
+        dst.triangleCount = src.triangle_count;
+        dst.vertexCount = src.vertex_count;
+        
         dst.cone[0] = bounds.cone_axis[0];
         dst.cone[1] = bounds.cone_axis[1];
         dst.cone[2] = bounds.cone_axis[2];
         dst.cone[3] = bounds.cone_cutoff;
-        // m.vertexOffset   = meshlet.vertex_offset;
-        // m.vertexCount    = meshlet.vertex_count;
-        // m.triangleOffset = meshlet.triangle_offset;
-        // m.triangleCount  = meshlet.triangle_count;
-
 
         mesh.meshlets.push_back(dst);
     }
+
     // 5. Pad to a multiple of 32 so the task shader can always dispatch
     //    full 32-meshlet waves without bounds-checking.
-    // while (mesh.meshlets.size() % 32)
-    //     mesh.meshlets.push_back(Meshlet{});
+    while (mesh.meshlets.size() % 32)
+        mesh.meshlets.push_back(Meshlet{});
 
     // printf("Meshlets: %zu  zero-area: %zu\n", mesh.meshlets.size(), zeroarea);
 
@@ -1226,7 +1212,7 @@ int main(int argc, const char** argv)
 
     
     // graphics pipeline layout
-    VkPipelineLayout meshLayout = createPipelineLayout(device, { &meshVS, &meshFS });
+    VkPipelineLayout meshLayout = createPipelineLayout(device, { &meshVS, &meshFS }, sizeof(MeshDraw));
     assert(meshLayout);
 
     // create descriptor update template
@@ -1236,7 +1222,7 @@ int main(int argc, const char** argv)
     VkPipelineLayout meshLayoutRTX = 0;
     VkDescriptorUpdateTemplate meshUpdateTemplateRTX = 0;
     if (rtxSupported){
-         meshLayoutRTX = createPipelineLayout(device, { &meshletTS, &meshletMS, &meshFS });
+         meshLayoutRTX = createPipelineLayout(device, { &meshletTS, &meshletMS, &meshFS }, sizeof(MeshDraw));
         assert(meshLayoutRTX);
 
         meshUpdateTemplateRTX = createUpdateTemplate(device, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayoutRTX, { &meshletTS, &meshletMS, &meshFS} );
@@ -1305,12 +1291,10 @@ int main(int argc, const char** argv)
     createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     Buffer mb = {};
-    // Buffer mvb = {};   // meshlet vertex index pool
-    // Buffer mtb = {};   // meshlet triangle index pool
+    Buffer mdb = {};
     if (rtxSupported){
         createBuffer(mb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        // createBuffer(mvb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        // createBuffer(mtb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        createBuffer(mdb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
 
     uploadBuffer(device, commandPool, commandBuffers, queue, vb, scratch, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
@@ -1319,8 +1303,7 @@ int main(int argc, const char** argv)
 
     if (rtxSupported) {
         uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, mesh.meshlets.data(), mesh.meshlets.size() * sizeof(Meshlet));
-        // uploadBuffer(device, commandPool, commandBuffers, queue, mvb, scratch, mesh.meshletVertices.data(), mesh.meshletVertices.size() * sizeof(uint32_t));
-        // uploadBuffer(device, commandPool, commandBuffers, queue, mtb, scratch, mesh.meshletTriangles.data(), mesh.meshletTriangles.size() * sizeof(uint8_t));
+        uploadBuffer(device, commandPool, commandBuffers, queue, mdb, scratch, mesh.meshletdata.data(), mesh.meshletdata.size() * sizeof(uint32_t));
     }
 
     fprintf(VkLogFile, "\n==================================================================================================================\n");
@@ -1380,16 +1363,26 @@ int main(int argc, const char** argv)
         vkCmdSetScissor(commandBuffers, 0, 1, &scissor);
 
         // draw calls go here
-        uint32_t drawCount = 1;
+        uint32_t drawCount = 1000;
+        std::vector<MeshDraw> draws(drawCount);
+
+        for (uint32_t i=0; i<drawCount; ++i){
+            draws[i].offset[0] = float(i % 10) / 10.0f + 0.5f / 10.f; 
+            draws[i].offset[1] = float(i / 10) / 10.0f + 0.5f / 10.f; 
+            draws[i].scale[0] = 1 / 10.f;
+            draws[i].scale[1] = 1 / 10.f;
+        }
 
         if (rtxSupported && rtxEnabled){
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineRTX);
 
-            DescriptorInfo descriptors[] = {vb.buffer, mb.buffer /*, mvb.buffer, mtb.buffer*/};
+            DescriptorInfo descriptors[] = {vb.buffer, mb.buffer /*, mvb.buffer, mtb.buffer*/, mdb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshUpdateTemplateRTX, meshLayoutRTX, 0, descriptors);
             
-            for (uint32_t i=0; i < drawCount; ++i)
+            for (auto& draw : draws){
+                vkCmdPushConstants(commandBuffers, meshLayoutRTX, VK_SHADER_STAGE_ALL, 0, sizeof(draw), &draw);
                 vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()) / 32, 0);
+            }
         }
         else {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
@@ -1399,8 +1392,10 @@ int main(int argc, const char** argv)
 
             vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-            for (uint32_t i=0; i < drawCount; ++i)
+            for (auto& draw : draws){
+                vkCmdPushConstants(commandBuffers, meshLayout, VK_SHADER_STAGE_ALL, 0, sizeof(draw), &draw);
                 vkCmdDrawIndexed(commandBuffers, uint32_t(mesh.indices.size()), 1, 0, 0, 0);
+            }
             
         }
         vkCmdEndRenderPass(commandBuffers);
@@ -1448,11 +1443,13 @@ int main(int argc, const char** argv)
         double frameGpuBegin = double(queryResult[0]) * props.limits.timestampPeriod * 1e-6;
         double frameGpuEnd = double(queryResult[1]) * props.limits.timestampPeriod * 1e-6;
 
-        
         double frameEnd = glfwGetTime() * 1000.0;
+
+        double trianglesPerSec = double(drawCount) * double(mesh.indices.size() / 3) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
+        // frameCpuAvg = 
         
         char title[256];
-        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; meshlets: %d; RTX: %s", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), int(mesh.indices.size() / 3), mesh.meshlets.size(), rtxEnabled ? "ON" : "OFF");
+        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; meshlets: %d; mesh shading: %s; %.2fB tri/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), int(mesh.indices.size() / 3), mesh.meshlets.size(), rtxEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9);
         glfwSetWindowTitle(window, title);
     }
 
@@ -1464,6 +1461,7 @@ int main(int argc, const char** argv)
 
     if (rtxSupported) {
         destroyBuffer(mb, device);
+        destroyBuffer(mdb, device);
     }
     
     destroyBuffer(vb, device);
