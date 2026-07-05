@@ -27,7 +27,7 @@
 
 #define VSYNC 0
 
-bool rtxEnabled = false;
+bool meshShadingEnabled = false;
 
 // for validation layer
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -386,7 +386,7 @@ VkSwapchainKHR createSwapchain(VkPhysicalDevice physicalDevice, VkDevice device,
     createInfo.imageExtent.height = winHeight;
     // createInfo.imageExtent = surfaceCaps.currentExtent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT ; // TODO : remove color attachment
     createInfo.queueFamilyIndexCount = 1;
     createInfo.pQueueFamilyIndices = &familyIndex;
     // createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -422,11 +422,11 @@ VkCommandPool createCommandPool(VkDevice device, uint32_t familyIndex){
 }
 
 /* Day 2 */
-VkRenderPass createRenderPass(VkDevice device, VkFormat format)
+VkRenderPass createRenderPass(VkDevice device, VkFormat colorFormat, VkFormat depthFormat)
 {
 
-    VkAttachmentDescription attachments[1] = {};
-    attachments[0].format = format;
+    VkAttachmentDescription attachments[2] = {};
+    attachments[0].format = colorFormat;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -435,12 +435,23 @@ VkRenderPass createRenderPass(VkDevice device, VkFormat format)
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentReference colorAttachments = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    attachments[1].format = depthFormat;
+    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorAttachment = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthAttachment = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subPass = {};
     subPass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subPass.colorAttachmentCount = 1;
-    subPass.pColorAttachments = &colorAttachments;
+    subPass.pColorAttachments = &colorAttachment;
+    subPass.pDepthStencilAttachment = &depthAttachment;
 
     VkRenderPassCreateInfo createInfo = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     createInfo.attachmentCount = sizeof(attachments) / sizeof(attachments[0]);
@@ -454,12 +465,13 @@ VkRenderPass createRenderPass(VkDevice device, VkFormat format)
     return renderPass;
 }
 
-VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass renderPass, VkImageView imageView, uint32_t width, uint32_t height){
+VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass renderPass, VkImageView colorView, VkImageView depthView, uint32_t width, uint32_t height){
 
+    VkImageView attachments[] = {colorView, depthView};
     VkFramebufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     createInfo.renderPass = renderPass;
-    createInfo.attachmentCount = 1;
-    createInfo.pAttachments = &imageView;
+    createInfo.attachmentCount = ARRAYSIZE(attachments);
+    createInfo.pAttachments = attachments;
     createInfo.width = width;
     createInfo.height = height;
     createInfo.layers = 1;
@@ -470,13 +482,15 @@ VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass renderPass, VkImag
     return framebuffer;
 }
 
-VkImageView createImageView(VkDevice device, VkImage swapchainImage, VkFormat format){
+VkImageView createImageView(VkDevice device, VkImage swapchainImage, VkFormat format ){
+    
+    VkImageAspectFlags aspectMask = (format == VK_FORMAT_D32_SFLOAT) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
 
     VkImageViewCreateInfo createInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     createInfo.image = swapchainImage;
     createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     createInfo.format = format;
-    createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    createInfo.subresourceRange.aspectMask = aspectMask;
     createInfo.subresourceRange.levelCount = 1;
     createInfo.subresourceRange.layerCount = 1;
 
@@ -487,7 +501,7 @@ VkImageView createImageView(VkDevice device, VkImage swapchainImage, VkFormat fo
 }
 
 
-VkImageMemoryBarrier imageBarrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask, VkImageLayout oldLayout, VkImageLayout newLayout)
+VkImageMemoryBarrier imageBarrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT)
 {
 
     VkImageMemoryBarrier result = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -499,7 +513,7 @@ VkImageMemoryBarrier imageBarrier(VkImage image, VkAccessFlags srcAccessMask, Vk
     result.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     result.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     result.image = image;
-    result.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    result.subresourceRange.aspectMask = aspectMask;
     result.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
     result.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
 
@@ -525,8 +539,6 @@ struct Swapchain{
     VkSwapchainKHR swapchain;
 
     std::vector<VkImage> images;
-    std::vector<VkImageView> imageViews;
-    std::vector<VkFramebuffer> framebuffers;
 
     uint32_t width, height;
     uint32_t imageCount;
@@ -546,50 +558,19 @@ void createSwapchain(Swapchain& result, VkPhysicalDevice physicalDevice, VkDevic
     std::vector<VkImage> images(imageCount);                                          // SHORTCUT
     VK_CHECK(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, images.data())); // should be called before vkAcquireNextImageKHR
 
-    // create swapchain image views
-    std::vector<VkImageView> imageViews(imageCount);
-    for (uint32_t i = 0; i < imageCount; ++i)
-    {
-        imageViews[i] = createImageView(device, images[i], format);
-        assert(imageViews[i]);
-    }
-
-    // create framebuffers
-    std::vector<VkFramebuffer> framebuffers(imageCount);
-    for (uint32_t i = 0; i < imageCount; ++i)
-    {
-        framebuffers[i] = createFramebuffer(device, renderPass, imageViews[i], width, height);
-        // framebuffers[i] = createFramebuffer(device, renderPass, imageViews[i], surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height);
-        assert(framebuffers[i]);
-    }
-
     result.swapchain = swapchain;
     result.images = images;
-    result.imageViews = imageViews;
-    result.framebuffers = framebuffers;
     result.width = width;
-    // result.width = surfaceCaps.currentExtent.width;
     result.height = height;
-    // result.height = surfaceCaps.currentExtent.height;
     result.imageCount = imageCount;
 
 }
 
 void destroySwapchain(VkDevice device, const Swapchain& swapchain){
-    for (uint32_t i = 0; i < swapchain.imageCount; ++i)
-    {
-        vkDestroyFramebuffer(device, swapchain.framebuffers[i], 0);
-    }
-
-    for (uint32_t i = 0; i < swapchain.imageCount; ++i)
-    {
-        vkDestroyImageView(device, swapchain.imageViews[i], 0);
-    }
-
-    vkDestroySwapchainKHR(device, swapchain.swapchain   , 0);
+    vkDestroySwapchainKHR(device, swapchain.swapchain, 0);
 }
 
-void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t familyIndex, VkFormat format, VkRenderPass renderPass) {
+bool resizeSwapchainIfNecessary(Swapchain& result, VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t familyIndex, VkFormat format, VkRenderPass renderPass) {
 
     VkSurfaceCapabilitiesKHR surfaceCaps;
     VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps));
@@ -598,7 +579,7 @@ void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physic
     uint32_t newHeight = surfaceCaps.currentExtent.height;
 
     if (result.width == newWidth && result.height == newHeight)
-        return;
+        return false;
 
     Swapchain old = result;
 
@@ -607,6 +588,8 @@ void resizeSwapchain(Swapchain& result, VkDevice device, VkPhysicalDevice physic
     VK_CHECK(vkDeviceWaitIdle(device));
 
     destroySwapchain(device, old);
+
+    return true;
 }
 
 VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
@@ -1087,11 +1070,64 @@ void destroyBuffer(const Buffer& buffer, VkDevice device){
     vkDestroyBuffer(device, buffer.buffer, 0);
 }
 
+// 
+struct Image{
+    VkImage image;
+    VkImageView imageView;
+    VkDeviceMemory memory;
+};
+
+void createImage(Image& result, VkDevice device, const VkPhysicalDeviceMemoryProperties& memoryProperties, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage){
+    // create Vk buffer container without memory
+    VkImageCreateInfo createInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+
+    createInfo.imageType = VK_IMAGE_TYPE_2D;
+    createInfo.format = format;
+    createInfo.extent = {width, height, 1};
+    createInfo.mipLevels = 1;
+    createInfo.arrayLayers = 1;
+    createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    createInfo.usage = usage;
+    createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImage image = 0;
+    VK_CHECK(vkCreateImage(device, &createInfo, 0, &image));
+
+    // ask memory requirements for the above created buffer to the Vulkan
+    VkMemoryRequirements memoryRequirements;
+    vkGetImageMemoryRequirements(device, image, &memoryRequirements);
+
+    uint32_t memoryTypeIndex = selectMemoryType(memoryProperties, memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    assert(memoryTypeIndex != ~0u);
+
+    VkMemoryAllocateInfo allocateInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocateInfo.allocationSize = memoryRequirements.size;
+    allocateInfo.memoryTypeIndex = memoryTypeIndex;
+
+    VkDeviceMemory deviceMemory = 0;
+    VK_CHECK(vkAllocateMemory(device, &allocateInfo, 0, &deviceMemory));
+
+    VK_CHECK(vkBindImageMemory(device, image, deviceMemory, 0));
+
+    result.image = image;
+    result.imageView = createImageView(device, image, format);
+    result.memory = deviceMemory;
+
+}
+
+void destroyImage(const Image& image, VkDevice device){
+    vkDestroyImageView(device, image.imageView, 0);
+    vkDestroyImage(device, image.image, 0);
+    vkFreeMemory(device, image.memory, 0);
+}
+
+
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods){
     if (action == GLFW_PRESS){
         if (key == GLFW_KEY_R){
-            rtxEnabled = !rtxEnabled;
+            meshShadingEnabled = !meshShadingEnabled;
         }
     }
 }
@@ -1142,15 +1178,15 @@ int main(int argc, const char** argv)
     std::vector<VkExtensionProperties> extensions(extensionCount);
     VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &extensionCount, extensions.data()));
 
-    bool rtxSupported = false;
+    bool meshShadingSupported = false;
     for (auto& ext : extensions){
         if (strcmp(ext.extensionName, "VK_NV_mesh_shader") == 0){
-            rtxSupported = true;
+            meshShadingSupported = true;
             break;
         }
     }
 
-    rtxEnabled = rtxSupported;
+    meshShadingEnabled = meshShadingSupported;
 
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(physicalDevice, &props);
@@ -1159,7 +1195,7 @@ int main(int argc, const char** argv)
     // create logical device
     uint32_t familyIndex = getGraphicsFamilyIndex(physicalDevice);
     assert(familyIndex != VK_QUEUE_FAMILY_IGNORED);
-    VkDevice device = createDevice(instance, physicalDevice, familyIndex, rtxSupported);
+    VkDevice device = createDevice(instance, physicalDevice, familyIndex, meshShadingSupported);
     assert(device);
 
     // creating surface
@@ -1171,6 +1207,7 @@ int main(int argc, const char** argv)
 
     // swapchain format
     VkFormat swapchainFormat = getSwapchainFormat(physicalDevice, surface);
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
     VkSurfaceCapabilitiesKHR surfaceCaps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps);
@@ -1187,7 +1224,7 @@ int main(int argc, const char** argv)
     vkGetDeviceQueue(device, familyIndex, 0, &queue);
 
     // create renderpass
-    VkRenderPass renderPass = createRenderPass(device, swapchainFormat);
+    VkRenderPass renderPass = createRenderPass(device, swapchainFormat, depthFormat);
     assert(renderPass);
 
     bool rcs = false;
@@ -1202,7 +1239,7 @@ int main(int argc, const char** argv)
 
     Shader meshletMS = {};
     Shader meshletTS = {};
-    if (rtxSupported){
+    if (meshShadingSupported){
         rcs = loadShader(meshletMS, device, "src/shaders/meshlet.mesh.spv");
         assert(rcs);
 
@@ -1214,9 +1251,9 @@ int main(int argc, const char** argv)
     // graphics pipeline layout
     Program meshProgram = createProgram(device, VK_PIPELINE_BIND_POINT_GRAPHICS, {&meshVS, &meshFS}, sizeof(MeshDraw));
 
-    Program meshProgramRTX = {};
-    if (rtxSupported){
-        meshProgramRTX = createProgram(device, VK_PIPELINE_BIND_POINT_GRAPHICS, { &meshletTS, &meshletMS, &meshFS }, sizeof(MeshDraw));
+    Program meshProgramMS = {};
+    if (meshShadingSupported){
+        meshProgramMS = createProgram(device, VK_PIPELINE_BIND_POINT_GRAPHICS, { &meshletTS, &meshletMS, &meshFS }, sizeof(MeshDraw));
     }
 
     // create graphics pipeline
@@ -1224,10 +1261,10 @@ int main(int argc, const char** argv)
     VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, {&meshVS, &meshFS}, meshProgram.layout);
     assert(meshPipeline);
 
-    VkPipeline meshPipelineRTX = 0;
-    if (rtxSupported){
-        meshPipelineRTX = createGraphicsPipeline(device, pipelineCache, renderPass, { &meshletTS, &meshletMS, &meshFS}, meshProgramRTX.layout);
-        assert(meshPipelineRTX);
+    VkPipeline meshPipelineMS = 0;
+    if (meshShadingSupported){
+        meshPipelineMS = createGraphicsPipeline(device, pipelineCache, renderPass, { &meshletTS, &meshletMS, &meshFS}, meshProgramMS.layout);
+        assert(meshPipelineMS);
     }
 
     // swapchain creation code
@@ -1257,7 +1294,7 @@ int main(int argc, const char** argv)
 	bool rcm = loadMesh(mesh, argv[1]);
     assert(rcm);
 
-    if (rtxSupported){
+    if (meshShadingSupported){
         buildMeshletsOpt(mesh);
         // buildMeshletCones(mesh);
 
@@ -1282,7 +1319,7 @@ int main(int argc, const char** argv)
 
     Buffer mb = {};
     Buffer mdb = {};
-    if (rtxSupported){
+    if (meshShadingSupported){
         createBuffer(mb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         createBuffer(mdb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
@@ -1291,7 +1328,7 @@ int main(int argc, const char** argv)
     
     uploadBuffer(device, commandPool, commandBuffers, queue, ib, scratch, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t));
 
-    if (rtxSupported) {
+    if (meshShadingSupported) {
         uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, mesh.meshlets.data(), mesh.meshlets.size() * sizeof(Meshlet));
         uploadBuffer(device, commandPool, commandBuffers, queue, mdb, scratch, mesh.meshletdata.data(), mesh.meshletdata.size() * sizeof(uint32_t));
     }
@@ -1300,6 +1337,12 @@ int main(int argc, const char** argv)
     fprintf(VkLogFile, "Begin Rendering");
     fprintf(VkLogFile, "\n==================================================================================================================\n");
 
+
+    Image colorTarget = {};
+    Image depthTarget = {};
+    VkFramebuffer targetFB = 0;
+
+
     while (!glfwWindowShouldClose(window))
     {
         /* code */
@@ -1307,7 +1350,22 @@ int main(int argc, const char** argv)
 
         glfwPollEvents();
 
-        resizeSwapchain(swapchain, device, physicalDevice, surface,  familyIndex, swapchainFormat, renderPass);
+        if (resizeSwapchainIfNecessary(swapchain, device, physicalDevice, surface,  familyIndex, swapchainFormat, renderPass) || !targetFB){
+            // recreate stuff
+            if (colorTarget.image){
+                destroyImage(colorTarget, device);
+            }
+            if (depthTarget.image){
+                destroyImage(depthTarget, device);
+            }
+            if (targetFB){
+                vkDestroyFramebuffer(device, targetFB, 0);
+            }
+
+            createImage(colorTarget, device, memoryProperties, swapchain.width, swapchain.height, swapchainFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            createImage(depthTarget, device, memoryProperties, swapchain.width, swapchain.height, depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+            targetFB = createFramebuffer(device, renderPass, colorTarget.imageView, depthTarget.imageView, swapchain.width, swapchain.height);
+        }
 
         uint32_t imageIndex = 0;
         VkResult acquireResult = vkAcquireNextImageKHR(device, swapchain.swapchain, ~0ull, acquireSemaphore, VK_NULL_HANDLE, &imageIndex);
@@ -1328,21 +1386,30 @@ int main(int argc, const char** argv)
         vkCmdResetQueryPool(commandBuffers, queryPool, 0, 128);
         vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 0);
 
-        VkImageMemoryBarrier renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                                                               VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderBeginBarrier);
+        // VkImageMemoryBarrier renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        //                                                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        //                      VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderBeginBarrier);
 
-        VkClearColorValue color = {48.0f / 255.0f, 10.0f / 255.0f, 36.0f / 255.0f, 1};
-        VkClearValue clearColor = {color};
+        VkImageMemoryBarrier renderBeginBarrier[] = {
+            imageBarrier(colorTarget.image, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
+            imageBarrier(depthTarget.image, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT),
+        };
+        vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(renderBeginBarrier), renderBeginBarrier);
+
+        
+        VkClearValue clearColor[2] = {};
+        clearColor[0].color = {48.0f / 255.0f, 10.0f / 255.0f, 36.0f / 255.0f, 1};
+        clearColor[1].depthStencil = {0.f, 0};
 
         VkRenderPassBeginInfo passBeginInfo = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         passBeginInfo.renderPass = renderPass;
-        passBeginInfo.framebuffer = swapchain.framebuffers[imageIndex];
+        // passBeginInfo.framebuffer = swapchain.framebuffers[imageIndex];
+        passBeginInfo.framebuffer = targetFB;
         passBeginInfo.renderArea.extent.width = swapchain.width;
         passBeginInfo.renderArea.extent.height = swapchain.height;
-        passBeginInfo.clearValueCount = 1;
-        passBeginInfo.pClearValues = &clearColor;
+        passBeginInfo.clearValueCount = ARRAYSIZE(clearColor);
+        passBeginInfo.pClearValues = clearColor;
 
         vkCmdBeginRenderPass(commandBuffers, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1363,14 +1430,14 @@ int main(int argc, const char** argv)
             draws[i].scale[1] = 1 / 10.f;
         }
 
-        if (rtxSupported && rtxEnabled){
-            vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineRTX);
+        if (meshShadingSupported && meshShadingEnabled){
+            vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineMS);
 
             DescriptorInfo descriptors[] = {vb.buffer, mb.buffer /*, mvb.buffer, mtb.buffer*/, mdb.buffer};
-            vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgramRTX.updateTemplate, meshProgramRTX.layout, 0, descriptors);
+            vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgramMS.updateTemplate, meshProgramMS.layout, 0, descriptors);
             
             for (auto& draw : draws){
-                vkCmdPushConstants(commandBuffers, meshProgramRTX.layout, meshProgramRTX.pushConstantStages, 0, sizeof(draw), &draw);
+                vkCmdPushConstants(commandBuffers, meshProgramMS.layout, meshProgramMS.pushConstantStages, 0, sizeof(draw), &draw);
                 vkCmdDrawMeshTasksNV(commandBuffers, uint32_t(mesh.meshlets.size()) / 32, 0);
             }
         }
@@ -1390,16 +1457,37 @@ int main(int argc, const char** argv)
         }
         vkCmdEndRenderPass(commandBuffers);
 
-        VkImageMemoryBarrier renderEndBarrier = imageBarrier(swapchain.images[imageIndex], VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
-                                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderEndBarrier);
+        VkImageMemoryBarrier copyBarrier[] = {
+            imageBarrier(colorTarget.image, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
+            imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        };
+        vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(copyBarrier), copyBarrier);
+
+        VkImageCopy copyRegion = {};
+        copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.srcSubresource.layerCount = 1;
+        copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.dstSubresource.layerCount = 1;
+        copyRegion.extent = {swapchain.width, swapchain.height, 1};
+
+        vkCmdCopyImage(commandBuffers, colorTarget.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchain.images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+        VkImageMemoryBarrier presentBarrier = imageBarrier(swapchain.images[imageIndex], VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &presentBarrier);
+
+        // VkImageMemoryBarrier renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderBeginBarrier);
+        // ============
+
+        // VkImageMemoryBarrier renderEndBarrier = imageBarrier(swapchain.images[imageIndex], VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        // vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderEndBarrier);
 
         vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
 
         VK_CHECK(vkEndCommandBuffer(commandBuffers));
 
-        VkPipelineStageFlags stageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        // VkPipelineStageFlags stageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // older code
+        VkPipelineStageFlags stageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
         VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submitInfo.waitSemaphoreCount = 1;
@@ -1439,7 +1527,7 @@ int main(int argc, const char** argv)
         // frameCpuAvg = 
         
         char title[256];
-        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; meshlets: %d; mesh shading: %s; %.2fB tri/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), int(mesh.indices.size() / 3), mesh.meshlets.size(), rtxEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9);
+        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; meshlets: %d; mesh shading: %s; %.2fB tri/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), int(mesh.indices.size() / 3), mesh.meshlets.size(), meshShadingEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9);
         glfwSetWindowTitle(window, title);
     }
 
@@ -1449,7 +1537,18 @@ int main(int argc, const char** argv)
 
     VK_CHECK(vkDeviceWaitIdle(device));
 
-    if (rtxSupported) {
+    if (colorTarget.image){
+        destroyImage(colorTarget, device);
+    }
+    if (depthTarget.image){
+        destroyImage(depthTarget, device);
+    }
+    if (targetFB){
+        vkDestroyFramebuffer(device, targetFB, 0);
+    }
+
+
+    if (meshShadingSupported) {
         destroyBuffer(mb, device);
         destroyBuffer(mdb, device);
     }
@@ -1473,15 +1572,15 @@ int main(int argc, const char** argv)
     vkDestroyPipeline(device, meshPipeline, 0);
     destroyProgram(device, meshProgram);
     
-    if (rtxSupported) {
-        vkDestroyPipeline(device, meshPipelineRTX, 0);
-        destroyProgram(device, meshProgramRTX);
+    if (meshShadingSupported) {
+        vkDestroyPipeline(device, meshPipelineMS, 0);
+        destroyProgram(device, meshProgramMS);
     }
 
     destroyShaderModule(meshFS, device);
     destroyShaderModule(meshVS, device);
 
-    if (rtxSupported) {
+    if (meshShadingSupported) {
         destroyShaderModule(meshletTS, device);
         destroyShaderModule(meshletMS, device);
     }

@@ -27,7 +27,7 @@ void main(){
     vec2 texccords = vec2(vertices[gl_VertexIndex].tu, vertices[gl_VertexIndex].tv);
 
     // gl_Position = vec4(position + vec3(0, 0, 0.5), 1.0);
-    gl_Position = vec4((position * vec3(meshDraw.scale, 1) + vec3(meshDraw.offset, 0)) * vec3(2, 2, 0.5) + vec3(-1, -1, 0.5), 1.0);
+    gl_Position = vec4((position * vec3(meshDraw.scale, 1) + vec3(meshDraw.offset, 0)) * vec3(2, 2, -0.5) + vec3(-1, -1, 0.5), 1.0);
 
     color = vec4(normal * 0.5 + vec3(0.5), 1.0);
 }

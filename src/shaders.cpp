@@ -259,6 +259,9 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     createInfo.pMultisampleState = &multisampleStateCreateInfo;
 
     VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencilStateCreateInfo.depthTestEnable = VK_TRUE;
+    depthStencilStateCreateInfo.depthWriteEnable = VK_TRUE;
+    depthStencilStateCreateInfo.depthCompareOp = VK_COMPARE_OP_GREATER; // AS WE ARE DOING INVERSE DEPTH TESTING
     createInfo.pDepthStencilState = &depthStencilStateCreateInfo;
 
     VkPipelineColorBlendAttachmentState colorAttachmentState = {};
