@@ -125,9 +125,9 @@ static VkDescriptorSetLayout createSetLayout(VkDevice device, Shaders shaders) {
             bindings.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings.descriptorCount = 1;
 
-            bindings.stageFlags = 0;
+            // bindings.stageFlags = 0;
             for (const Shader* shader : shaders){
-                if (shader->storageBufferMask & (1 << i)){
+                if (storageBufferMask & (1 << i)){
                     bindings.stageFlags |= shader->stage;
                 }
             }

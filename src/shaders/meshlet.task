@@ -11,9 +11,13 @@
 
 #include "mesh.h"
 
-#define CULL 0
+#define CULL 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform block{
+    MeshDraw meshDraw;
+};
 
 layout(binding=1) readonly buffer Meshlets{
     Meshlet meshlets[];
@@ -28,15 +32,15 @@ out taskNV block {
 };
 
 
-bool coneCull(vec4 cone, vec3 view){
-    return dot(cone.xyz, view) > cone.w;
+bool coneCull(vec3 cone_axis, float cone_cutoff, vec3 view){
+    return (dot(cone_axis, view) > cone_cutoff);
 }
 
 shared uint meshletCount;
 
 void main(){
-    uint mgi = gl_WorkGroupID.x;
     uint ti = gl_LocalInvocationID.x;
+    uint mgi = gl_WorkGroupID.x;
     uint mi =  mgi * 32 + ti;
 
 #if CULL
@@ -77,8 +81,9 @@ void main(){
     }
 */
     // using ballot
-    bool accept = !coneCull(meshlets[mi].cone, vec3(0,0,1));
+    bool accept = !coneCull(rotateQuat(meshlets[mi].cone.xyz, meshDraw.orientation), meshlets[mi].cone.w, vec3(0,0,1));
     uvec4 ballot = subgroupBallot(accept);
+
     uint index = subgroupBallotExclusiveBitCount(ballot);
 
     if (accept){

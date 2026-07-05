@@ -57,11 +57,11 @@ void main(){
     uint ti = gl_LocalInvocationID.x;
 
 // TODO : once Task shader start doing correct culling, remove this condition from below
-    if (coneCull(meshlets[mi].cone, vec3(0,0,1))){
-        if (ti == 0)
-            gl_PrimitiveCountNV = 0;
-        return;
-    }
+    // if (coneCull(meshlets[mi].cone, vec3(0,0,1))){
+    //     if (ti == 0)
+    //         gl_PrimitiveCountNV = 0;
+    //     return;
+    // }
    
     uint vertexCount = uint(meshlets[mi].vertexCount);
     uint triangleCount = uint(meshlets[mi].triangleCount);
@@ -84,7 +84,7 @@ void main(){
         vec3 normal = vec3(int(vertices[vi].nx), int(vertices[vi].ny), int(vertices[vi].nz)) / 127.0 - 1.0;
         vec2 texccords = vec2(vertices[vi].tu, vertices[vi].tv);
 
-        gl_MeshVerticesNV[i].gl_Position = vec4((position * vec3(meshDraw.scale, 1) + vec3(meshDraw.offset, 0)) * vec3(2, 2, -0.5) + vec3(-1, -1, 0.5), 1.0);
+        gl_MeshVerticesNV[i].gl_Position = meshDraw.projection * vec4(rotateQuat(position, meshDraw.orientation) * vec3(meshDraw.scale) + meshDraw.position.xyz, 1);
 
         color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 
