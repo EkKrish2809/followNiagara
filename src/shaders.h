@@ -5,6 +5,14 @@ struct Shader {
     VkShaderStageFlagBits stage;
 
     uint32_t storageBufferMask;
+
+    bool usesPushConstant;
+};
+
+struct Program{
+    VkPipelineLayout layout;
+    VkDescriptorUpdateTemplate updateTemplate;
+    VkShaderStageFlags pushConstantStages;
 };
 
 bool loadShader(Shader& shader, VkDevice device, const char *path);
@@ -12,9 +20,12 @@ void destroyShaderModule(Shader& shader, VkDevice device);
 
 using Shaders = std::initializer_list<const Shader*>;
 
-VkPipelineLayout createPipelineLayout(VkDevice device,  Shaders shaders, size_t pushConstantSize);
-VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout,  Shaders shaders);
+// VkPipelineLayout createPipelineLayout(VkDevice device,  Shaders shaders, VkShaderStageFlags pushConstantStages, size_t pushConstantSize);
+// VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device,VkPipelineBindPoint bindPoint, VkPipelineLayout layout,  Shaders shaders);
 VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache, VkRenderPass renderPass, Shaders shaders, VkPipelineLayout layout);
+
+Program createProgram(VkDevice device, VkPipelineBindPoint bindPoint, Shaders shaders, size_t pushConstantSize);
+void destroyProgram(VkDevice device, const Program& program);
 
 
 struct DescriptorInfo {
