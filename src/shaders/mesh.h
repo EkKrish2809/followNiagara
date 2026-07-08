@@ -5,13 +5,16 @@ struct Vertex{
 };
 
 struct Meshlet{
-    vec4 cone;
+    vec3 center;
+    float radius;
+    // vec3 cone_apex;
+    // float padding;
+    int8_t cone_axis[3];
+    int8_t cone_cutoff;
+    
     uint dataOffset;
     uint8_t vertexCount;
     uint8_t triangleCount;
-    // uint vertices[64];
-    // // uint8_t indices[124*3];   // up to 126 triangles
-    // uint indicesPacked[124*3/4];   // up to 126 triangles
 };
 
 struct MeshDraw{
@@ -19,8 +22,6 @@ struct MeshDraw{
     vec3 position;
     float scale;
     vec4 orientation;
-    // vec2 offset;
-    // vec2 scale;
 };
 
 

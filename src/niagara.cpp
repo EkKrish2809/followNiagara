@@ -614,9 +614,13 @@ VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
 
 // For mesh shader
 struct alignas(16) Meshlet{
-    float cone[4];
-    // uint32_t vertices[64];
-    // uint8_t indices[124] [3];   // up to 126 triangles
+    glm::vec3 center;
+    float radius;
+    // glm::vec3 cone_apex;
+    // float padding;
+    int8_t cone_axis[3];
+    int8_t cone_cutoff;
+
     uint32_t dataOffset;    // dataOffset... dataOffset+vertexCount-1 stores vertex indices, we store indices packed in 4b units after that
     uint8_t vertexCount;
     uint8_t triangleCount;
@@ -973,10 +977,14 @@ void buildMeshletsOpt(Mesh& mesh){
         dst.triangleCount = src.triangle_count;
         dst.vertexCount = src.vertex_count;
         
-        dst.cone[0] = bounds.cone_axis[0];
-        dst.cone[1] = bounds.cone_axis[1];
-        dst.cone[2] = bounds.cone_axis[2];
-        dst.cone[3] = bounds.cone_cutoff;
+        dst.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
+        dst.radius = bounds.radius;
+        // dst.cone_apex = glm::vec3(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2]);
+        // dst.padding = 0;
+        dst.cone_axis[0] = bounds.cone_axis_s8[0];
+        dst.cone_axis[1] = bounds.cone_axis_s8[1];
+        dst.cone_axis[2] = bounds.cone_axis_s8[2];
+        dst.cone_cutoff = bounds.cone_cutoff_s8;
 
         mesh.meshlets.push_back(dst);
     }
@@ -1319,14 +1327,14 @@ int main(int argc, const char** argv)
         buildMeshletsOpt(mesh);
         // buildMeshletCones(mesh);
 
-        size_t culled = 0;
-        for (Meshlet& meshlet : mesh.meshlets){
-            if (meshlet.cone[3] < 1.0f && meshlet.cone[2] > meshlet.cone[3]){
-                culled++;
-            }
-        }
+        // size_t culled = 0;
+        // for (Meshlet& meshlet : mesh.meshlets){
+        //     if (meshlet.cone[3] < 1.0f && meshlet.cone[2] > meshlet.cone[3]){
+        //         culled++;
+        //     }
+        // }
 
-        printf("Culled meshlets : %d/%d\n", int(culled), int(mesh.meshlets.size()));
+        // printf("Culled meshlets : %d/%d\n", int(culled), int(mesh.meshlets.size()));
     }
 
     Buffer scratch = {};
