@@ -9,14 +9,16 @@
 #extension GL_KHR_shader_subgroup_arithmetic: require
 #extension GL_KHR_shader_subgroup_ballot: require
 
+#extension GL_ARB_shader_draw_parameters : require
+
 #include "mesh.h"
 
 #define CULL 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
-layout(push_constant) uniform block{
-    MeshDraw meshDraw;
+layout(binding=0) readonly buffer Draws{
+    MeshDraw draws[];
 };
 
 layout(binding=1) readonly buffer Meshlets{
@@ -32,15 +34,6 @@ out taskNV block {
 };
 
 
-// bool coneCull1(vec3 cone_axis, float cone_cutoff, vec3 view){
-//     return (dot(cone_axis, view) > cone_cutoff);
-// }
-// bool coneCull2(vec3 cone_apex, vec3 cone_axis, float cone_cutoff, vec3 camera_position){
-//     return (dot(normalize(cone_apex- camera_position), cone_axis) > cone_cutoff);
-// }
-// bool accept1 = !coneCull1(rotateQuat(meshlets[mi].cone_axis, meshDraw.orientation), meshlets[mi].cone_cutoff, vec3(0,0,1));
-// bool accept2 = !coneCull2(rotateQuat(meshlets[mi].cone_apex, meshDraw.orientation) * meshDraw.scale + meshDraw.position, rotateQuat(meshlets[mi].cone_axis, meshDraw.orientation), meshlets[mi].cone_cutoff, vec3(0,0,0));
-
 bool coneCull(vec3 center, float radius, vec3 cone_axis, float cone_cutoff, vec3 camera_position){
     return (dot(center - camera_position, cone_axis) > cone_cutoff * length(center - camera_position) + radius);
 }
@@ -52,7 +45,52 @@ void main(){
     uint mgi = gl_WorkGroupID.x;
     uint mi =  mgi * 32 + ti;
 
+    MeshDraw meshDraw = draws[gl_DrawIDARB];
+
 #if CULL
+    // using ballot
+    vec3 center = rotateQuat(meshlets[mi].center, meshDraw.orientation) * meshDraw.scale + meshDraw.position;
+    float radius = meshlets[mi].radius * meshDraw.scale;
+    vec3 cone_axis = rotateQuat(vec3(int(meshlets[mi].cone_axis[0]) / 127.0, int(meshlets[mi].cone_axis[1])/ 127.0, int(meshlets[mi].cone_axis[2])/ 127.0), meshDraw.orientation);
+    float cone_cutoff = int(meshlets[mi].cone_cutoff) / 127.0;
+    vec3 camera_position =vec3(0,0,0);
+    bool accept3 = !coneCull(center, radius, cone_axis, cone_cutoff, camera_position);
+
+    bool accept = accept3;
+    uvec4 ballot = subgroupBallot(accept);
+
+    uint index = subgroupBallotExclusiveBitCount(ballot);
+
+    if (accept){
+        meshletIndices[index] = mi;
+    }
+    uint count = subgroupBallotBitCount(ballot);
+
+    if (ti == 0){
+        gl_TaskCountNV = count;
+    }
+
+#else
+    meshletIndices[ti] = mi;
+
+    if (ti == 0){
+        gl_TaskCountNV = 32;
+    }
+#endif
+}
+
+
+
+// can be used as different culling formulas
+// bool coneCull1(vec3 cone_axis, float cone_cutoff, vec3 view){
+//     return (dot(cone_axis, view) > cone_cutoff);
+// }
+// bool coneCull2(vec3 cone_apex, vec3 cone_axis, float cone_cutoff, vec3 camera_position){
+//     return (dot(normalize(cone_apex- camera_position), cone_axis) > cone_cutoff);
+// }
+// bool accept1 = !coneCull1(rotateQuat(meshlets[mi].cone_axis, meshDraw.orientation), meshlets[mi].cone_cutoff, vec3(0,0,1));
+// bool accept2 = !coneCull2(rotateQuat(meshlets[mi].cone_apex, meshDraw.orientation) * meshDraw.scale + meshDraw.position, rotateQuat(meshlets[mi].cone_axis, meshDraw.orientation), meshlets[mi].cone_cutoff, vec3(0,0,0));
+
 /*
     // using memory barriers
     meshletCount = 0;
@@ -89,33 +127,3 @@ void main(){
         gl_TaskCountNV = count;
     }
 */
-    // using ballot
-    vec3 center = rotateQuat(meshlets[mi].center, meshDraw.orientation) * meshDraw.scale + meshDraw.position;
-    float radius = meshlets[mi].radius * meshDraw.scale;
-    vec3 cone_axis = rotateQuat(vec3(int(meshlets[mi].cone_axis[0]) / 127.0, int(meshlets[mi].cone_axis[1])/ 127.0, int(meshlets[mi].cone_axis[2])/ 127.0), meshDraw.orientation);
-    float cone_cutoff = int(meshlets[mi].cone_cutoff) / 127.0;
-    vec3 camera_position =vec3(0,0,0);
-    bool accept3 = !coneCull(center, radius, cone_axis, cone_cutoff, camera_position);
-
-    bool accept = accept3;
-    uvec4 ballot = subgroupBallot(accept);
-
-    uint index = subgroupBallotExclusiveBitCount(ballot);
-
-    if (accept){
-        meshletIndices[index] = mi;
-    }
-    uint count = subgroupBallotBitCount(ballot);
-
-    if (ti == 0){
-        gl_TaskCountNV = count;
-    }
-
-#else
-    meshletIndices[ti] = mi;
-
-    if (ti == 0){
-        gl_TaskCountNV = 32;
-    }
-#endif
-}

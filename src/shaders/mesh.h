@@ -17,11 +17,16 @@ struct Meshlet{
     uint8_t triangleCount;
 };
 
-struct MeshDraw{
+struct Globals{
     mat4 projection;
+};
+
+struct MeshDraw{
     vec3 position;
     float scale;
     vec4 orientation;
+
+    uint commandData[7];
 };
 
 
