@@ -165,6 +165,9 @@ struct alignas(16) MeshDraw{
     float scale;
     glm::quat orientation;
 
+    int32_t vertexOffset;
+    uint32_t meshletOffset;
+    uint32_t meshletCount;
 
     union{
         uint32_t commandData[7];
@@ -182,15 +185,43 @@ struct Vertex{
     uint16_t tu, tv;
 };
 
-
 struct Mesh{
+    uint32_t meshletOffset;
+    uint32_t meshletCount;
+
+    uint32_t vertexOffset;
+    uint32_t vertexCount;
+
+    uint32_t indexOffset;
+    uint32_t indexCount;
+};
+
+struct Geometry{
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Meshlet> meshlets;
     std::vector<uint32_t> meshletdata;
+    std::vector<Mesh> meshes;
 };
 
-bool loadMesh(Mesh& result, const char* path){
+
+float halfToFloat(uint16_t v){
+    uint16_t sign = v >> 15;
+    uint16_t exp = (v >> 10) & 31;
+    uint16_t mant = v & 1023;
+
+    assert(exp != 31);
+
+    if (exp == 0){
+        assert(mant == 0);
+        return 0.f;
+    } else {
+        return (sign ? -1.f : 1.f) * ldexpf(float(mant + 1024) / 1024.f, exp -15);
+    }
+}
+
+
+bool loadMesh(Geometry& result, const char* path, bool buildMeshlets){
     fastObjMesh* objMesh = fast_obj_read(path);;
 	if (!objMesh){
         printf("Can not found the specified OBJ file\n");
@@ -199,8 +230,8 @@ bool loadMesh(Mesh& result, const char* path){
 
 	// size_t index_count = file.f_size / 3;
 	
-	std::vector<Vertex> vertices;
-    vertices.reserve(objMesh->index_count);
+	std::vector<Vertex> triangle_vertices;
+    triangle_vertices.reserve(objMesh->index_count);
 	// std::vector<uint32_t> indices(objMesh->index_count);
 
     uint32_t indexOffset = 0;   // running offset into mesh->indices[]
@@ -255,7 +286,7 @@ bool loadMesh(Mesh& result, const char* path){
 
                 // printf("x = %f, y = %f, z = %f\n", vtx.nx, vtx.ny, vtx.nz);
 
-                vertices.push_back(vtx);
+                triangle_vertices.push_back(vtx);
             }
             
             // Use px, py, pz, nx, ny, nz, u, v_coord to build your vertex buffer
@@ -279,268 +310,144 @@ bool loadMesh(Mesh& result, const char* path){
 		v.tv = vti < 0 ? 0.f : file.vt[vti * 3 + 1];
 	}*/
 
-		std::vector<uint32_t> remap(objMesh->index_count);
-		size_t vertex_count = meshopt_generateVertexRemap(remap.data(), 0, objMesh->index_count, vertices.data(), objMesh->index_count, sizeof(Vertex));
+    std::vector<uint32_t> remap(objMesh->index_count);
+    size_t vertex_count = meshopt_generateVertexRemap(remap.data(), 0, objMesh->index_count, triangle_vertices.data(), objMesh->index_count, sizeof(Vertex));
 
-		result.vertices.resize(vertex_count);
-		result.indices.resize(objMesh->index_count);
+    printf("Vertex Count : %d\n", vertex_count );
 
-		meshopt_remapVertexBuffer(result.vertices.data(), vertices.data(), objMesh->index_count, sizeof(Vertex), remap.data());
-		meshopt_remapIndexBuffer(result.indices.data(), 0, objMesh->index_count, remap.data());
+    std::vector<Vertex> vertices(vertex_count);
+    std::vector<uint32_t> indices(objMesh->index_count);
 
-    if (1){
-        meshopt_optimizeVertexCache(result.indices.data(), result.indices.data(), objMesh->index_count, vertex_count);
-        meshopt_optimizeVertexFetch(result.vertices.data(), result.indices.data(), objMesh->index_count, result.vertices.data(), vertex_count, sizeof(Vertex));
-    }
+    meshopt_remapVertexBuffer(vertices.data(), triangle_vertices.data(), objMesh->index_count, sizeof(Vertex), remap.data());
+    meshopt_remapIndexBuffer(indices.data(), 0, objMesh->index_count, remap.data());
+
+    meshopt_optimizeVertexCache(indices.data(), indices.data(), objMesh->index_count, vertex_count);
+    meshopt_optimizeVertexFetch(vertices.data(), indices.data(), objMesh->index_count, vertices.data(), vertex_count, sizeof(Vertex));
 
 
     fast_obj_destroy(objMesh);
 
+    // /////////
+    uint32_t vertexOffset = uint32_t(result.vertices.size());
+    uint32_t indexOffset_ = uint32_t(result.indices.size());
+    
+    result.vertices.insert(result.vertices.end(), vertices.begin(), vertices.end());
+    result.indices.insert(result.indices.end(), indices.begin(), indices.end());
+    
+    // for (uint32_t i : indices){
+    //     result.indices.push_back(i + vertexOffset);
+    // }
+
+    uint32_t meshletOffset = uint32_t(result.meshlets.size());
+    uint32_t meshletCount_ = 0;
+
+    if (buildMeshlets){
+        size_t max_vertices = 64;
+        size_t max_triangles = 124;
+        const float cone_weight = 0.0f;   // balance cluster size vs cone culling quality
+
+        size_t maxMeshlets = meshopt_buildMeshletsBound(indices.size(), max_vertices, max_triangles);
+
+        std::vector<meshopt_Meshlet> meshlets(maxMeshlets);
+        std::vector<uint32_t>        mo_vertices(maxMeshlets * max_vertices);
+        std::vector<uint8_t>         mo_triangles(maxMeshlets * max_triangles * 3);
+
+        // build meshlets
+        size_t meshletCount = meshopt_buildMeshlets(
+            meshlets.data(),
+            mo_vertices.data(),
+            mo_triangles.data(),
+            indices.data(),
+            indices.size(),
+            &vertices[0].vx,   // float* to first position component
+            vertices.size(),
+            sizeof(Vertex),          // stride in bytes
+            max_vertices,
+            max_triangles,
+            cone_weight);
+
+        meshlets.resize(meshletCount);
+        // result.meshlets.clear();
+        result.meshlets.reserve(meshletCount);
+        // result.meshlets.resize(meshletCount);
+
+        // while (meshlets.size() % 32)
+        //     meshlets.push_back(meshopt_Meshlet{});
+        
+        for (size_t i = 0; i < meshletCount; ++i){
+        
+            const meshopt_Meshlet& src = meshlets[i];
+            size_t dataOffset = result.meshletdata.size();
+
+            // Copy vertices
+            for (unsigned int j = 0; j < src.vertex_count; ++j){
+                // dst.vertices[j] = mo_vertices[src.vertex_offset + j];
+                result.meshletdata.push_back(mo_vertices[src.vertex_offset + j]);
+                // result.meshletdata.push_back(vertexOffset + mo_vertices[j]);
+            }
+
+            const uint8_t* triangleData = mo_triangles.data() + src.triangle_offset;
+            unsigned int indexGroupCount = (src.triangle_count * 3 + 3) / 4;
+
+            for (unsigned int j = 0; j < indexGroupCount; ++j){
+                uint32_t packed = 0;
+                unsigned int count = std::min<unsigned int>(4, src.triangle_count * 3 - j * 4);
+                memcpy(&packed, triangleData + j * 4, count);
+                result.meshletdata.push_back(packed);
+            }
+
+            meshopt_Bounds bounds = meshopt_computeMeshletBounds(
+                &mo_vertices[src.vertex_offset],
+                // &mo_vertices[vertexOffset],
+                &mo_triangles[src.triangle_offset],
+                src.triangle_count,
+                &vertices[0].vx,
+                vertices.size(),
+                sizeof(Vertex));
+
+            // Meshlet& dst = mesh.meshlets[i];
+            Meshlet dst = {};
+
+            dst.dataOffset = uint32_t(dataOffset);
+            dst.triangleCount = src.triangle_count;
+            dst.vertexCount = src.vertex_count;
+            
+            dst.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
+            dst.radius = bounds.radius;
+            // dst.cone_apex = glm::vec3(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2]);
+            // dst.padding = 0;
+            dst.cone_axis[0] = bounds.cone_axis_s8[0];
+            dst.cone_axis[1] = bounds.cone_axis_s8[1];
+            dst.cone_axis[2] = bounds.cone_axis_s8[2];
+            dst.cone_cutoff = bounds.cone_cutoff_s8;
+
+            result.meshlets.push_back(dst);
+        }
+
+        // 5. Pad to a multiple of 32 so the task shader can always dispatch
+        //    full 32-meshlet waves without bounds-checking.
+        // while (mesh.meshlets.size() % 32)
+        //     mesh.meshlets.push_back(Meshlet{});
+
+        // printf("Meshlets: %zu  zero-area: %zu\n", mesh.meshlets.size(), zeroarea);
+
+        meshletCount_ = uint32_t(meshlets.size());
+    }
+
+    Mesh mesh = {};
+    mesh.meshletOffset = meshletOffset;
+    mesh.meshletCount = meshletCount_;
+
+    mesh.vertexOffset = vertexOffset;
+    mesh.vertexCount = uint32_t(vertices.size());
+
+    mesh.indexOffset = indexOffset_;
+    mesh.indexCount = uint32_t(indices.size());
+
+    result.meshes.push_back(mesh);
+
     return true;
 }
-
-float halfToFloat(uint16_t v){
-    uint16_t sign = v >> 15;
-    uint16_t exp = (v >> 10) & 31;
-    uint16_t mant = v & 1023;
-
-    assert(exp != 31);
-
-    if (exp == 0){
-        assert(mant == 0);
-        return 0.f;
-    } else {
-        return (sign ? -1.f : 1.f) * ldexpf(float(mant + 1024) / 1024.f, exp -15);
-    }
-}
-
-/*
-void buildMeshlets(Mesh& mesh){
-
-    // size_t max_vertices = 64;
-    // size_t max_triangles = 126;
-    // std::vector<meshopt_Meshlet> meshlets(meshopt_buildMeshletsBound(mesh.indices.size(), max_vertices, max_triangles));
-    // meshlets.resize(meshopt_buildMeshlets(meshlets.data(), mesh.indices.data(), mesh.indices.size(), mesh.vertices.size(), max_vertices, max_triangles));
-
-    // meshlets.resize(meshopt_buildMeshlets(meshlets.data(), mesh.vertices.data(), meshlets[0]. mesh.indices.data(), mesh.indices.size(), mesh.vertices.size(), max_vertices, max_triangles));
-
-    Meshlet meshlet = {};
-
-    std::vector<uint8_t> meshletVertices(mesh.vertices.size(), 0xff);
-
-    for (size_t i=0; i < mesh.indices.size(); i += 3){
-        unsigned int a = mesh.indices[i + 0];
-        unsigned int b = mesh.indices[i + 1];
-        unsigned int c = mesh.indices[i + 2];
-
-        uint8_t& av = meshletVertices[a];
-        uint8_t& bv = meshletVertices[b];
-        uint8_t& cv = meshletVertices[c];
-
-        if (meshlet.vertexCount + (av == 0xff) + (bv == 0xff) + (cv == 0xff) > 64 || meshlet.triangleCount >= 126){
-            mesh.meshlets.push_back(meshlet);
-            meshlet = {};
-            memset(meshletVertices.data(), 0xff, mesh.vertices.size());
-        }
-
-        if (av == 0xff){
-            av = meshlet.vertexCount;
-            meshlet.vertices[meshlet.vertexCount++] = a;
-        }
-
-        if (bv == 0xff){
-            bv = meshlet.vertexCount;
-            meshlet.vertices[meshlet.vertexCount++] = b;
-        }
-        if (cv == 0xff){
-            cv = meshlet.vertexCount;
-            meshlet.vertices[meshlet.vertexCount++] = c;
-        }
-
-        meshlet.indices[meshlet.triangleCount * 3] [0] = av;
-        meshlet.indices[meshlet.triangleCount * 3] [1] = bv;
-        meshlet.indices[meshlet.triangleCount * 3] [2] = cv;
-        meshlet.triangleCount++;
-    }
-
-    if (meshlet.triangleCount)
-        mesh.meshlets.push_back(meshlet);
-
-    // TODO: we don't really need this but it makes sure we can assume that we need all 32 meshlets in task shader
-    while(mesh.meshlets.size() % 32){
-        mesh.meshlets.push_back(Meshlet());
-    }
-// }
-
-
-// void buildMeshletCones(Mesh& mesh){
-
-    size_t zeroarea = 0;
-    for (Meshlet& meshlet : mesh.meshlets){
-        
-        float normals[126][6] = {};
-        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
-            unsigned int a = meshlet.indices[i * 3] [0];
-            unsigned int b = meshlet.indices[i * 3] [1];
-            unsigned int c = meshlet.indices[i * 3] [2];
-
-            const Vertex& va = mesh.vertices[meshlet.vertices[a]];
-            const Vertex& vb = mesh.vertices[meshlet.vertices[b]];
-            const Vertex& vc = mesh.vertices[meshlet.vertices[c]];
-
-            float p0[3] = {(va.vx), (va.vy), (va.vz)};
-            float p1[3] = {(vb.vx), (vb.vy), (vb.vz)};
-            float p2[3] = {(vc.vx), (vc.vy), (vc.vz)};
-
-            float p10[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
-            float p20[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
-
-            float normalx = p10[1] * p20[2] - p10[2] * p20[1];
-            float normaly = p10[2] * p20[0] - p10[0] * p20[2];
-            float normalz = p10[0] * p20[1] - p10[1] * p20[0];
-
-            float area = sqrtf(normalx * normalx + normaly * normaly + normalz * normalz);
-            float invarea = area == 0.f ? 0.f : 1 / area;
-            zeroarea += area == 0.f;
-
-            normals[i][0] = normalx * invarea;
-            normals[i][1] = normaly * invarea;
-            normals[i][2] = normalz * invarea;
-        }
-
-        float avgnormal[3] = {};
-
-        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
-            avgnormal[0] += normals[i][0];
-            avgnormal[1] += normals[i][1];
-            avgnormal[2] += normals[i][2];
-        }
-
-        float avglength = sqrtf(avgnormal[0] * avgnormal[0] + avgnormal[1] * avgnormal[1] + avgnormal[2] * avgnormal[2]);
-        if (avglength == 0.f) {
-            avgnormal[0] = 1.f;
-            avgnormal[1] = 0.f;
-            avgnormal[2] = 0.f;
-        } else {
-            avgnormal[0] /= avglength;
-            avgnormal[1] /= avglength;
-            avgnormal[2] /= avglength;
-        }
-
-        float mindp = 1.f;
-
-        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
-            float dp = normals[i][0] * avgnormal[0] + normals[i][1] * avgnormal[1] + normals[i][2] * avgnormal[2];
-
-            mindp = std::min(mindp, dp);
-        }
-
-        float conew = mindp <= 0.f ? 1 : sqrtf(1 - mindp * mindp);
-
-        meshlet.cone[0] = avgnormal[0];
-        meshlet.cone[1] = avgnormal[1];
-        meshlet.cone[2] = avgnormal[2];
-        meshlet.cone[3] = conew;
-    }
-}
-*/
-
-// TODO : writing this function here like this for now, but needs to correctly map to latest meshoptimizer API's
-// if it is already to the latest API, merge it to above buildMeshlets() function 
-void buildMeshletsOpt(Mesh& mesh){
-    size_t max_vertices = 64;
-    size_t max_triangles = 124;
-    const float cone_weight = 0.0f;   // balance cluster size vs cone culling quality
-
-    size_t maxMeshlets = meshopt_buildMeshletsBound(mesh.indices.size(), max_vertices, max_triangles);
-
-    std::vector<meshopt_Meshlet> meshlets(maxMeshlets);
-    // meshlets.resize(meshopt_buildMeshlets())
-    std::vector<uint32_t>        mo_vertices(maxMeshlets * max_vertices);
-    std::vector<uint8_t>         mo_triangles(maxMeshlets * max_triangles * 3);
-
-    // build meshlets
-    size_t meshletCount = meshopt_buildMeshlets(
-        meshlets.data(),
-        mo_vertices.data(),
-        mo_triangles.data(),
-        mesh.indices.data(),
-        mesh.indices.size(),
-        &mesh.vertices[0].vx,   // float* to first position component
-        mesh.vertices.size(),
-        sizeof(Vertex),          // stride in bytes
-        max_vertices,
-        max_triangles,
-        cone_weight);
-
-    meshlets.resize(meshletCount);
-    mesh.meshlets.clear();
-    mesh.meshlets.reserve(meshletCount);
-
-    // while (meshlets.size() % 32)
-    //     meshlets.push_back(meshopt_Meshlet{});
-    
-    for (size_t i = 0; i < meshletCount; ++i){
-       
-        const meshopt_Meshlet& src = meshlets[i];
-        size_t dataOffset = mesh.meshletdata.size();
-
-        // Copy vertices
-        for (unsigned int j = 0; j < src.vertex_count; ++j){
-            // dst.vertices[j] = mo_vertices[src.vertex_offset + j];
-            mesh.meshletdata.push_back(mo_vertices[src.vertex_offset + j]);
-        }
-
-        const uint8_t* triangleData = mo_triangles.data() + src.triangle_offset;
-        unsigned int indexGroupCount = (src.triangle_count * 3 + 3) / 4;
-
-        for (unsigned int j = 0; j < indexGroupCount; ++j){
-            uint32_t packed = 0;
-            unsigned int count = std::min<unsigned int>(4, src.triangle_count * 3 - j * 4);
-            memcpy(&packed, triangleData + j * 4, count);
-            mesh.meshletdata.push_back(packed);
-        }
-
-        meshopt_Bounds bounds = meshopt_computeMeshletBounds(
-            &mo_vertices[src.vertex_offset],
-            &mo_triangles[src.triangle_offset],
-            src.triangle_count,
-            &mesh.vertices[0].vx,
-            mesh.vertices.size(),
-            sizeof(Vertex));
-
-        // Meshlet& dst = mesh.meshlets[i];
-        Meshlet dst = {};
-
-        dst.dataOffset = uint32_t(dataOffset);
-        dst.triangleCount = src.triangle_count;
-        dst.vertexCount = src.vertex_count;
-        
-        dst.center = glm::vec3(bounds.center[0], bounds.center[1], bounds.center[2]);
-        dst.radius = bounds.radius;
-        // dst.cone_apex = glm::vec3(bounds.cone_apex[0], bounds.cone_apex[1], bounds.cone_apex[2]);
-        // dst.padding = 0;
-        dst.cone_axis[0] = bounds.cone_axis_s8[0];
-        dst.cone_axis[1] = bounds.cone_axis_s8[1];
-        dst.cone_axis[2] = bounds.cone_axis_s8[2];
-        dst.cone_cutoff = bounds.cone_cutoff_s8;
-
-        mesh.meshlets.push_back(dst);
-    }
-
-    // 5. Pad to a multiple of 32 so the task shader can always dispatch
-    //    full 32-meshlet waves without bounds-checking.
-    while (mesh.meshlets.size() % 32)
-        mesh.meshlets.push_back(Meshlet{});
-
-    // printf("Meshlets: %zu  zero-area: %zu\n", mesh.meshlets.size(), zeroarea);
-
-}
-
-
-// 
-
-
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods){
     if (action == GLFW_PRESS){
@@ -718,23 +625,12 @@ int main(int argc, const char** argv)
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
 
 	// Mesh loading code
-	Mesh mesh;
-	bool rcm = loadMesh(mesh, argv[1]);
-    assert(rcm);
-
-    if (meshShadingSupported){
-        buildMeshletsOpt(mesh);
-        // buildMeshletCones(mesh);
-
-        // size_t culled = 0;
-        // for (Meshlet& meshlet : mesh.meshlets){
-        //     if (meshlet.cone[3] < 1.0f && meshlet.cone[2] > meshlet.cone[3]){
-        //         culled++;
-        //     }
-        // }
-
-        // printf("Culled meshlets : %d/%d\n", int(culled), int(mesh.meshlets.size()));
+	Geometry geometry;
+    for (int i=1; i<argc; ++i){
+        if (!loadMesh(geometry, argv[i], meshShadingSupported))
+            printf("Error : mesh %s Failed to Load\n", argv[i]);
     }
+
 
     Buffer scratch = {};
     createBuffer(scratch, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -752,13 +648,13 @@ int main(int argc, const char** argv)
         createBuffer(mdb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
 
-    uploadBuffer(device, commandPool, commandBuffers, queue, vb, scratch, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+    uploadBuffer(device, commandPool, commandBuffers, queue, vb, scratch, geometry.vertices.data(), geometry.vertices.size() * sizeof(Vertex));
     
-    uploadBuffer(device, commandPool, commandBuffers, queue, ib, scratch, mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t));
+    uploadBuffer(device, commandPool, commandBuffers, queue, ib, scratch, geometry.indices.data(), geometry.indices.size() * sizeof(uint32_t));
 
     if (meshShadingSupported) {
-        uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, mesh.meshlets.data(), mesh.meshlets.size() * sizeof(Meshlet));
-        uploadBuffer(device, commandPool, commandBuffers, queue, mdb, scratch, mesh.meshletdata.data(), mesh.meshletdata.size() * sizeof(uint32_t));
+        uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, geometry.meshlets.data(), geometry.meshlets.size() * sizeof(Meshlet));
+        uploadBuffer(device, commandPool, commandBuffers, queue, mdb, scratch, geometry.meshletdata.data(), geometry.meshletdata.size() * sizeof(uint32_t));
     }
 
     fprintf(VkLogFile, "\n==================================================================================================================\n");
@@ -766,28 +662,40 @@ int main(int argc, const char** argv)
     fprintf(VkLogFile, "\n==================================================================================================================\n");
 
 
-    uint32_t drawCount = 30000;
+    uint32_t drawCount = 3000;
     std::vector<MeshDraw> draws(drawCount);
 
     srand(42);
 
+    uint32_t triangleCount = 0;
+
     for (uint32_t i=0; i<drawCount; ++i){
+
+        const Mesh& mesh = geometry.meshes[rand() % geometry.meshes.size()];
+
         draws[i].position[0] = float(rand()) / RAND_MAX * 40 - 20; 
         draws[i].position[1] = float(rand()) / RAND_MAX * 40 - 20; 
         draws[i].position[2] = float(rand()) / RAND_MAX * 40 - 20;
-        draws[i].scale = float(rand()) / RAND_MAX + 0.3f;
+        draws[i].scale = float(rand()) / RAND_MAX + 1;
 
         glm::vec3 axis = glm::vec3(float(rand()) / RAND_MAX * 2 - 1, float(rand()) / RAND_MAX * 2 - 1, float(rand()) / RAND_MAX * 2 - 1);
         float angle = glm::radians(float(rand()) / RAND_MAX * 90.f);
 
         draws[i].orientation = glm::rotate(glm::quat(1, 0, 0, 0), angle, axis);
+        
+        draws[i].vertexOffset = mesh.vertexOffset;
+        draws[i].meshletOffset = mesh.meshletOffset;
+        draws[i].meshletCount = mesh.meshletCount;
 
         //
         memset(draws[i].commandData, 0, sizeof(draws[i].commandData));
-        draws[i].commandIndirect.indexCount = uint32_t(mesh.indices.size());
+        draws[i].commandIndirect.indexCount = mesh.indexCount;
+        draws[i].commandIndirect.firstIndex = mesh.indexOffset;
         draws[i].commandIndirect.instanceCount = 1;
-        draws[i].commandIndirectMS.taskCount = uint32_t(mesh.meshlets.size() / 32);
+        draws[i].commandIndirect.vertexOffset = int32_t(mesh.vertexOffset);
+        draws[i].commandIndirectMS.taskCount = uint32_t((mesh.meshletCount + 31) / 32);
 
+        triangleCount += mesh.indexCount / 3;
     }
 
     Buffer db = {};
@@ -966,11 +874,11 @@ int main(int argc, const char** argv)
 
         double frameEnd = glfwGetTime() * 1000.0;
 
-        double trianglesPerSec = double(drawCount) * double(mesh.indices.size() / 3) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
-        double kittensPerSec = double(drawCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
+        double trianglesPerSec = double(triangleCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
+        double drawsPerSec = double(drawCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
         
         char title[256];
-        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; meshlets: %d; mesh shading: %s; %.2fB tri/sec, %.1fM kittens/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), int(mesh.indices.size() / 3), mesh.meshlets.size(), meshShadingEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9, kittensPerSec * 1e-6);
+        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; mesh shading: %s; %.2fB tri/sec, %.1fM draws/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), triangleCount, meshShadingEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9, drawsPerSec * 1e-6);
         glfwSetWindowTitle(window, title);
     }
 
@@ -1048,3 +956,134 @@ int main(int argc, const char** argv)
     }
     return (0);
 }
+
+/*
+void buildMeshlets(Mesh& mesh){
+
+    // size_t max_vertices = 64;
+    // size_t max_triangles = 126;
+    // std::vector<meshopt_Meshlet> meshlets(meshopt_buildMeshletsBound(mesh.indices.size(), max_vertices, max_triangles));
+    // meshlets.resize(meshopt_buildMeshlets(meshlets.data(), mesh.indices.data(), mesh.indices.size(), mesh.vertices.size(), max_vertices, max_triangles));
+
+    // meshlets.resize(meshopt_buildMeshlets(meshlets.data(), mesh.vertices.data(), meshlets[0]. mesh.indices.data(), mesh.indices.size(), mesh.vertices.size(), max_vertices, max_triangles));
+
+    Meshlet meshlet = {};
+
+    std::vector<uint8_t> meshletVertices(mesh.vertices.size(), 0xff);
+
+    for (size_t i=0; i < mesh.indices.size(); i += 3){
+        unsigned int a = mesh.indices[i + 0];
+        unsigned int b = mesh.indices[i + 1];
+        unsigned int c = mesh.indices[i + 2];
+
+        uint8_t& av = meshletVertices[a];
+        uint8_t& bv = meshletVertices[b];
+        uint8_t& cv = meshletVertices[c];
+
+        if (meshlet.vertexCount + (av == 0xff) + (bv == 0xff) + (cv == 0xff) > 64 || meshlet.triangleCount >= 126){
+            mesh.meshlets.push_back(meshlet);
+            meshlet = {};
+            memset(meshletVertices.data(), 0xff, mesh.vertices.size());
+        }
+
+        if (av == 0xff){
+            av = meshlet.vertexCount;
+            meshlet.vertices[meshlet.vertexCount++] = a;
+        }
+
+        if (bv == 0xff){
+            bv = meshlet.vertexCount;
+            meshlet.vertices[meshlet.vertexCount++] = b;
+        }
+        if (cv == 0xff){
+            cv = meshlet.vertexCount;
+            meshlet.vertices[meshlet.vertexCount++] = c;
+        }
+
+        meshlet.indices[meshlet.triangleCount * 3] [0] = av;
+        meshlet.indices[meshlet.triangleCount * 3] [1] = bv;
+        meshlet.indices[meshlet.triangleCount * 3] [2] = cv;
+        meshlet.triangleCount++;
+    }
+
+    if (meshlet.triangleCount)
+        mesh.meshlets.push_back(meshlet);
+
+    // TODO: we don't really need this but it makes sure we can assume that we need all 32 meshlets in task shader
+    while(mesh.meshlets.size() % 32){
+        mesh.meshlets.push_back(Meshlet());
+    }
+// }
+
+
+// void buildMeshletCones(Mesh& mesh){
+
+    size_t zeroarea = 0;
+    for (Meshlet& meshlet : mesh.meshlets){
+        
+        float normals[126][6] = {};
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            unsigned int a = meshlet.indices[i * 3] [0];
+            unsigned int b = meshlet.indices[i * 3] [1];
+            unsigned int c = meshlet.indices[i * 3] [2];
+
+            const Vertex& va = mesh.vertices[meshlet.vertices[a]];
+            const Vertex& vb = mesh.vertices[meshlet.vertices[b]];
+            const Vertex& vc = mesh.vertices[meshlet.vertices[c]];
+
+            float p0[3] = {(va.vx), (va.vy), (va.vz)};
+            float p1[3] = {(vb.vx), (vb.vy), (vb.vz)};
+            float p2[3] = {(vc.vx), (vc.vy), (vc.vz)};
+
+            float p10[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+            float p20[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+
+            float normalx = p10[1] * p20[2] - p10[2] * p20[1];
+            float normaly = p10[2] * p20[0] - p10[0] * p20[2];
+            float normalz = p10[0] * p20[1] - p10[1] * p20[0];
+
+            float area = sqrtf(normalx * normalx + normaly * normaly + normalz * normalz);
+            float invarea = area == 0.f ? 0.f : 1 / area;
+            zeroarea += area == 0.f;
+
+            normals[i][0] = normalx * invarea;
+            normals[i][1] = normaly * invarea;
+            normals[i][2] = normalz * invarea;
+        }
+
+        float avgnormal[3] = {};
+
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            avgnormal[0] += normals[i][0];
+            avgnormal[1] += normals[i][1];
+            avgnormal[2] += normals[i][2];
+        }
+
+        float avglength = sqrtf(avgnormal[0] * avgnormal[0] + avgnormal[1] * avgnormal[1] + avgnormal[2] * avgnormal[2]);
+        if (avglength == 0.f) {
+            avgnormal[0] = 1.f;
+            avgnormal[1] = 0.f;
+            avgnormal[2] = 0.f;
+        } else {
+            avgnormal[0] /= avglength;
+            avgnormal[1] /= avglength;
+            avgnormal[2] /= avglength;
+        }
+
+        float mindp = 1.f;
+
+        for (unsigned int i = 0; i < meshlet.triangleCount; ++i){
+            float dp = normals[i][0] * avgnormal[0] + normals[i][1] * avgnormal[1] + normals[i][2] * avgnormal[2];
+
+            mindp = std::min(mindp, dp);
+        }
+
+        float conew = mindp <= 0.f ? 1 : sqrtf(1 - mindp * mindp);
+
+        meshlet.cone[0] = avgnormal[0];
+        meshlet.cone[1] = avgnormal[1];
+        meshlet.cone[2] = avgnormal[2];
+        meshlet.cone[3] = conew;
+    }
+}
+*/

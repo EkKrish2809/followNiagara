@@ -1,9 +1,6 @@
 #define VK_USE_PLATFORM_XLIB_KHR
 #include "common.h"
 
-// #define VOLK_IMPLEMENTATION
-// #include "../include/volk/volk.h"
-
 #include "device.h"
 
 #include <stdio.h>
@@ -12,7 +9,6 @@
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
 
-// #define VK_USE_PLATFORM_XLIB_KHR
 #include <vulkan/vulkan.h>
 #include <X11/Xlib.h>
 

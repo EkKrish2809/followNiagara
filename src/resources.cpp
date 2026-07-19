@@ -1,9 +1,6 @@
 #include "common.h"
 #include "resources.h"
 
-// #define VOLK_IMPLEMENTATION
-// #include "../include/volk/volk.h"
-
 #include <string.h>
 
 VkImageMemoryBarrier imageBarrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask, VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectMask)

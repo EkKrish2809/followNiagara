@@ -2,14 +2,9 @@
 #include "common.h"
 #include "swapchain.h"
 
-// #define VOLK_IMPLEMENTATION
-// #include "../include/volk/volk.h"
-
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
-
-// #include <X11/Xlib.h>
 
 #include <stdio.h>
 #include <algorithm>

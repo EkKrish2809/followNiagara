@@ -26,6 +26,10 @@ struct MeshDraw{
     float scale;
     vec4 orientation;
 
+    int vertexOffset;
+    uint meshletOffset;
+    uint meshletCount;
+
     uint commandData[7];
 };
 
