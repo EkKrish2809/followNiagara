@@ -1,6 +1,11 @@
 rm ./a.out
 
+# compile compute shader
+glslc src/shaders/drawcmd.comp -o src/shaders/drawcmd.comp.spv
+
+# compile other shaders
 glslc src/shaders/mesh.vert -o src/shaders/mesh.vert.spv
+
 glslc src/shaders/meshlet.task -c --target-spv=spv1.3 -o src/shaders/meshlet.task.spv
 # glslc src/shaders/meshlet.task --target-env spirv1.3 -o src/shaders/meshlet.task.spv
 glslc src/shaders/meshlet.mesh -o src/shaders/meshlet.mesh.spv
@@ -22,4 +27,5 @@ FILES=(
 
 g++ "${FILES[@]}" -g3 -lglfw -lvulkan -lX11
 
-./a.out asset/treasurebox.obj asset/kitten.obj asset/treasurebox.obj
+./a.out asset/treasurebox.obj 
+# asset/kitten.obj asset/treasurebox.obj

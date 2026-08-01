@@ -166,17 +166,16 @@ struct alignas(16) MeshDraw{
     glm::quat orientation;
 
     int32_t vertexOffset;
+    uint32_t indexOffset;
+    uint32_t indexCount;
     uint32_t meshletOffset;
     uint32_t meshletCount;
 
-    union{
-        uint32_t commandData[7];
+};
 
-        struct{
-            VkDrawIndexedIndirectCommand commandIndirect;
-            VkDrawMeshTasksIndirectCommandNV commandIndirectMS;
-        };
-    };
+struct MeshDrawCommand{
+    VkDrawIndexedIndirectCommand indirect;
+    VkDrawMeshTasksIndirectCommandNV indirectMS;
 };
 
 struct Vertex{
@@ -475,8 +474,8 @@ int main(int argc, const char** argv)
 		// return 1;
 	}
 
-    VkLogFile = fopen("validation.log", "wa");
-    assert(VkLogFile);
+    // VkLogFile = fopen("validation.log", "wa");
+    // assert(VkLogFile);
 
     int ret = glfwInit();
     assert(ret);
@@ -564,6 +563,12 @@ int main(int argc, const char** argv)
 
     bool rcs = false;
     // shader module
+    // compute shader
+    Shader drawcmdCS = {};
+    rcs = loadShader(drawcmdCS, device, "src/shaders/drawcmd.comp.spv");
+    assert(rcs);
+    
+    // other rendering shaders
     Shader meshVS = {};
     rcs = loadShader(meshVS, device, "src/shaders/mesh.vert.spv");
     assert(rcs);
@@ -582,7 +587,12 @@ int main(int argc, const char** argv)
         assert(rcs);
     } 
 
-    
+    VkPipelineCache pipelineCache = 0;
+    // compute pipeline layout
+    Program drawcmdProgram = createProgram(device, VK_PIPELINE_BIND_POINT_COMPUTE, {&drawcmdCS}, 0);
+
+    VkPipeline drawcmdPipeline = createComputePipeline(device, pipelineCache, drawcmdCS, drawcmdProgram.layout);
+
     // graphics pipeline layout
     Program meshProgram = createProgram(device, VK_PIPELINE_BIND_POINT_GRAPHICS, {&meshVS, &meshFS}, sizeof(Globals));
 
@@ -592,7 +602,6 @@ int main(int argc, const char** argv)
     }
 
     // create graphics pipeline
-    VkPipelineCache pipelineCache = 0;
     VkPipeline meshPipeline = createGraphicsPipeline(device, pipelineCache, renderPass, {&meshVS, &meshFS}, meshProgram.layout);
     assert(meshPipeline);
 
@@ -687,19 +696,16 @@ int main(int argc, const char** argv)
         draws[i].meshletOffset = mesh.meshletOffset;
         draws[i].meshletCount = mesh.meshletCount;
 
-        //
-        memset(draws[i].commandData, 0, sizeof(draws[i].commandData));
-        draws[i].commandIndirect.indexCount = mesh.indexCount;
-        draws[i].commandIndirect.firstIndex = mesh.indexOffset;
-        draws[i].commandIndirect.instanceCount = 1;
-        draws[i].commandIndirect.vertexOffset = int32_t(mesh.vertexOffset);
-        draws[i].commandIndirectMS.taskCount = uint32_t((mesh.meshletCount + 31) / 32);
-
         triangleCount += mesh.indexCount / 3;
     }
 
     Buffer db = {};
-    createBuffer(db, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT| VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    createBuffer(db, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // for commandbuffers
+    Buffer dcb = {};
+    createBuffer(dcb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
 
     uploadBuffer(device, commandPool, commandBuffers, queue, db, scratch, draws.data(), draws.size() * sizeof(MeshDraw));
 
@@ -750,10 +756,19 @@ int main(int argc, const char** argv)
         vkCmdResetQueryPool(commandBuffers, queryPool, 0, 128);
         vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 0);
 
-        // VkImageMemoryBarrier renderBeginBarrier = imageBarrier(swapchain.images[imageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        //                                                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        // vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        //                      VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderBeginBarrier);
+        // run compute pipeline
+        {
+            vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_COMPUTE, drawcmdPipeline);
+
+            DescriptorInfo descriptors[] = {db.buffer, dcb.buffer};
+            vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawcmdProgram.updateTemplate, drawcmdProgram.layout, 0, descriptors);
+
+            vkCmdDispatch(commandBuffers, uint32_t((draws.size() + 31) / 32), 1, 1);
+
+            VkBufferMemoryBarrier cmdEndBarrier = bufferBarrier(dcb.buffer, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+            vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, 0, 1, &cmdEndBarrier, 0, 0);
+        }
+
 
         VkImageMemoryBarrier renderBeginBarrier[] = {
             imageBarrier(colorTarget.image, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL),
@@ -793,7 +808,7 @@ int main(int argc, const char** argv)
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgramMS.updateTemplate, meshProgramMS.layout, 0, descriptors);
             
             vkCmdPushConstants(commandBuffers, meshProgramMS.layout, meshProgramMS.pushConstantStages, 0, sizeof(globals), &globals);
-            vkCmdDrawMeshTasksIndirectNV(commandBuffers, db.buffer, offsetof(MeshDraw, commandIndirectMS), uint32_t(draws.size()), sizeof(MeshDraw));
+            vkCmdDrawMeshTasksIndirectNV(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirectMS), uint32_t(draws.size()), sizeof(MeshDrawCommand));
         }
         else {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
@@ -804,7 +819,7 @@ int main(int argc, const char** argv)
             vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
             vkCmdPushConstants(commandBuffers, meshProgram.layout, meshProgram.pushConstantStages, 0, sizeof(globals), &globals);
-            vkCmdDrawIndexedIndirect(commandBuffers, db.buffer, offsetof(MeshDraw, commandIndirect), uint32_t(draws.size()), sizeof(MeshDraw));
+            vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
         }
         vkCmdEndRenderPass(commandBuffers);
 
@@ -878,7 +893,7 @@ int main(int argc, const char** argv)
         double drawsPerSec = double(drawCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
         
         char title[256];
-        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %d; mesh shading: %s; %.2fB tri/sec, %.1fM draws/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), triangleCount, meshShadingEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9, drawsPerSec * 1e-6);
+        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; triangles: %.1fM; mesh shading: %s; %.2fB tri/sec, %.1fM draws/sec", (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), double(triangleCount) * 1e-6, meshShadingEnabled ? "ON" : "OFF", trianglesPerSec * 1e-9, drawsPerSec * 1e-6);
         glfwSetWindowTitle(window, title);
     }
 
@@ -898,6 +913,8 @@ int main(int argc, const char** argv)
         vkDestroyFramebuffer(device, targetFB, 0);
     }
 
+    destroyBuffer(db, device);
+    destroyBuffer(dcb, device);
 
     if (meshShadingSupported) {
         destroyBuffer(mb, device);
@@ -906,7 +923,6 @@ int main(int argc, const char** argv)
     
     destroyBuffer(vb, device);
     destroyBuffer(ib, device);
-    destroyBuffer(db, device);
     
     destroyBuffer(scratch, device);
 
@@ -921,6 +937,9 @@ int main(int argc, const char** argv)
 
     destroySwapchain(device, swapchain);
 
+    vkDestroyPipeline(device, drawcmdPipeline, 0);
+    destroyProgram(device, drawcmdProgram);
+
     vkDestroyPipeline(device, meshPipeline, 0);
     destroyProgram(device, meshProgram);
     
@@ -928,6 +947,8 @@ int main(int argc, const char** argv)
         vkDestroyPipeline(device, meshPipelineMS, 0);
         destroyProgram(device, meshProgramMS);
     }
+
+    destroyShaderModule(drawcmdCS, device);
 
     destroyShaderModule(meshFS, device);
     destroyShaderModule(meshVS, device);
@@ -948,12 +969,12 @@ int main(int argc, const char** argv)
 
     vkDestroyInstance(instance, 0);
 
-    if (VkLogFile)
-    {
-        printf("\nLogFile closed \n");
-        fclose(VkLogFile);
-        VkLogFile = NULL;
-    }
+    // if (VkLogFile)
+    // {
+    //     printf("\nLogFile closed \n");
+    //     fclose(VkLogFile);
+    //     VkLogFile = NULL;
+    // }
     return (0);
 }
 

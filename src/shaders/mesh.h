@@ -27,12 +27,24 @@ struct MeshDraw{
     vec4 orientation;
 
     int vertexOffset;
+    uint indexOffset;
+    uint indexCount;
     uint meshletOffset;
     uint meshletCount;
 
     uint commandData[7];
 };
 
+struct MeshDrawCommand{
+    uint    indexCount;
+    uint    instanceCount;
+    uint    firstIndex;
+    uint    vertexOffset;
+    uint    firstInstance;
+
+    uint    taskCount;
+    uint    firstTask;
+};
 
 vec3 rotateQuat(vec3 v, vec4 q){
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
