@@ -474,8 +474,8 @@ int main(int argc, const char** argv)
 		// return 1;
 	}
 
-    // VkLogFile = fopen("validation.log", "wa");
-    // assert(VkLogFile);
+    VkLogFile = fopen("validation.log", "wa");
+    assert(VkLogFile);
 
     int ret = glfwInit();
     assert(ret);
@@ -590,7 +590,7 @@ int main(int argc, const char** argv)
     VkPipelineCache pipelineCache = 0;
     // compute pipeline layout
     Program drawcmdProgram = createProgram(device, VK_PIPELINE_BIND_POINT_COMPUTE, {&drawcmdCS}, 0);
-
+    // compute pipeline will actually attach layout from above program
     VkPipeline drawcmdPipeline = createComputePipeline(device, pipelineCache, drawcmdCS, drawcmdProgram.layout);
 
     // graphics pipeline layout
@@ -681,6 +681,7 @@ int main(int argc, const char** argv)
     for (uint32_t i=0; i<drawCount; ++i){
 
         const Mesh& mesh = geometry.meshes[rand() % geometry.meshes.size()];
+        // const Mesh& mesh = geometry.meshes[0];
 
         draws[i].position[0] = float(rand()) / RAND_MAX * 40 - 20; 
         draws[i].position[1] = float(rand()) / RAND_MAX * 40 - 20; 
@@ -693,6 +694,8 @@ int main(int argc, const char** argv)
         draws[i].orientation = glm::rotate(glm::quat(1, 0, 0, 0), angle, axis);
         
         draws[i].vertexOffset = mesh.vertexOffset;
+        draws[i].indexOffset = mesh.indexOffset;
+        draws[i].indexCount = mesh.indexCount;
         draws[i].meshletOffset = mesh.meshletOffset;
         draws[i].meshletCount = mesh.meshletCount;
 
@@ -756,6 +759,7 @@ int main(int argc, const char** argv)
         vkCmdResetQueryPool(commandBuffers, queryPool, 0, 128);
         vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 0);
 
+        // fprintf(VkLogFile, "Debug : 1\n");
         // run compute pipeline
         {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_COMPUTE, drawcmdPipeline);
@@ -775,7 +779,7 @@ int main(int argc, const char** argv)
             imageBarrier(depthTarget.image, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT),
         };
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(renderBeginBarrier), renderBeginBarrier);
-
+        // fprintf(VkLogFile, "Debug : 2\n");
         
         VkClearValue clearColor[2] = {};
         clearColor[0].color = {48.0f / 255.0f, 10.0f / 255.0f, 36.0f / 255.0f, 1};
@@ -829,6 +833,7 @@ int main(int argc, const char** argv)
         };
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(copyBarrier), copyBarrier);
 
+        // fprintf(VkLogFile, "Debug : 3\n");
         VkImageCopy copyRegion = {};
         copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copyRegion.srcSubresource.layerCount = 1;
@@ -873,13 +878,15 @@ int main(int argc, const char** argv)
         presentInfo.pSwapchains = &swapchain.swapchain;
         presentInfo.pImageIndices = &imageIndex;
 
+        
         VkResult presentResult = vkQueuePresentKHR(queue, &presentInfo);
         if (presentResult != VK_ERROR_OUT_OF_DATE_KHR && presentResult != VK_SUBOPTIMAL_KHR)
         {
             VK_CHECK(presentResult);
         }
-
+        
         VK_CHECK(vkDeviceWaitIdle(device));
+        // fprintf(VkLogFile, "Debug : 4\n");
 
         uint64_t queryResult[2];
         vkGetQueryPoolResults(device, queryPool, 0, ARRAYSIZE(queryResult), sizeof(queryResult), queryResult, sizeof(queryResult[0]), VK_QUERY_RESULT_64_BIT);
@@ -969,12 +976,12 @@ int main(int argc, const char** argv)
 
     vkDestroyInstance(instance, 0);
 
-    // if (VkLogFile)
-    // {
-    //     printf("\nLogFile closed \n");
-    //     fclose(VkLogFile);
-    //     VkLogFile = NULL;
-    // }
+    if (VkLogFile)
+    {
+        printf("\nLogFile closed \n");
+        fclose(VkLogFile);
+        VkLogFile = NULL;
+    }
     return (0);
 }
 

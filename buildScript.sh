@@ -27,5 +27,4 @@ FILES=(
 
 g++ "${FILES[@]}" -g3 -lglfw -lvulkan -lX11
 
-./a.out asset/treasurebox.obj 
-# asset/kitten.obj asset/treasurebox.obj
+./a.out asset/treasurebox.obj asset/kitten.obj 

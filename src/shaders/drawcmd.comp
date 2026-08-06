@@ -21,6 +21,7 @@ void main() {
     uint ti = gl_LocalInvocationID.x;
     uint gi = gl_WorkGroupID.x;
     uint di = gi * 32 + ti;
+    if (di >= draws.length()) return;
 
     drawCommands[di].indexCount = draws[di].indexCount;
     drawCommands[di].instanceCount = 1;

@@ -32,7 +32,7 @@ struct MeshDraw{
     uint meshletOffset;
     uint meshletCount;
 
-    uint commandData[7];
+    // uint commandData[7];
 };
 
 struct MeshDrawCommand{
