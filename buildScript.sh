@@ -1,7 +1,7 @@
 rm ./a.out
 
 # compile compute shader
-glslc src/shaders/drawcmd.comp -o src/shaders/drawcmd.comp.spv
+glslc src/shaders/drawcmd.comp -c --target-spv=spv1.3 -o src/shaders/drawcmd.comp.spv
 
 # compile other shaders
 glslc src/shaders/mesh.vert -o src/shaders/mesh.vert.spv

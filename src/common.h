@@ -17,6 +17,8 @@ do                             \
     assert(res == VK_SUCCESS); \
 } while (0)
 
+// printf("\nresult %ld\n", res);  \
+
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(array) (sizeof(array) / sizeof(array[0]))
 #endif

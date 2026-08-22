@@ -256,6 +256,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
         VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
         VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
         VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+        VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
     };
     if (rtxSupported){
         extensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);

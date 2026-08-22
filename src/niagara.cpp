@@ -30,7 +30,7 @@
 #define GLM_FORCE_XYZW_ONLY
 #include "math.h"
 
-#define _DEBUG 0
+#define _DEBUG 1
 
 #define RTX 0
 
@@ -122,10 +122,6 @@ VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass renderPass, VkImag
     return framebuffer;
 }
 
-
-
-
-
 VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
 
     VkQueryPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
@@ -176,6 +172,7 @@ struct alignas(16) MeshDraw{
 };
 
 struct MeshDrawCommand{
+    uint32_t drawId;
     VkDrawIndexedIndirectCommand indirect;
     VkDrawMeshTasksIndirectCommandNV indirectMS;
 };
@@ -411,8 +408,8 @@ bool loadMesh(Geometry& result, const char* path, bool buildMeshlets){
 
         // 5. Pad to a multiple of 32 so the task shader can always dispatch
         //    full 32-meshlet waves without bounds-checking.
-        // while (mesh.meshlets.size() % 32)
-        //     mesh.meshlets.push_back(Meshlet{});
+        while (result.meshlets.size() % 32)
+            result.meshlets.push_back(Meshlet());
 
         // printf("Meshlets: %zu  zero-area: %zu\n", mesh.meshlets.size(), zeroarea);
 
@@ -577,6 +574,7 @@ int main(int argc, const char** argv)
     Shader drawcmdCS = {};
     rcs = loadShader(drawcmdCS, device, "src/shaders/drawcmd.comp.spv");
     assert(rcs);
+    printf("drawcmdCS module = %p\n", (void*)drawcmdCS.module); 
     
     // other rendering shaders
     Shader meshVS = {};
@@ -681,7 +679,11 @@ int main(int argc, const char** argv)
     fprintf(VkLogFile, "\n==================================================================================================================\n");
 
 
-    uint32_t drawCount = 100000;
+    uint32_t drawCount = 50000;
+
+    // TODO: Remove the need of this padding
+    drawCount = (drawCount + 31) & ~31;
+
     std::vector<MeshDraw> draws(drawCount);
 
     srand(42);
@@ -721,6 +723,10 @@ int main(int argc, const char** argv)
     // for commandbuffers
     Buffer dcb = {};
     createBuffer(dcb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // Draw command count buffer bit
+    Buffer dccb = {};
+    createBuffer(dccb, device, memoryProperties, 4, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
 
     uploadBuffer(device, commandPool, commandBuffers, queue, db, scratch, draws.data(), draws.size() * sizeof(MeshDraw));
@@ -775,7 +781,7 @@ int main(int argc, const char** argv)
         // fprintf(VkLogFile, "Debug : 1\n");
         mat4 projection = perspectiveProjection(glm::radians(70.f), float(swapchain.width) / float(swapchain.height), 0.01f);
 
-        float drawDistance = 100;
+        float drawDistance = 100.0f;
         // run compute pipeline
         {
             vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 2);
@@ -792,16 +798,25 @@ int main(int argc, const char** argv)
                 frustum[5] = vec4(0, 0, -1, drawDistance); //-projection[2]; // z < 0    ---- reverse z, infinite far plane
             }
 
+            // initialize the DrawCommandCount to 0 for compute shader
+            vkCmdFillBuffer(commandBuffers, dccb.buffer, 0, 4, 0);
+
+            VkBufferMemoryBarrier fillBarrier = bufferBarrier(dccb.buffer, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, 0, 1, &fillBarrier, 0, 0);
+
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_COMPUTE, drawcmdPipeline);
 
-            DescriptorInfo descriptors[] = {db.buffer, dcb.buffer};
+            DescriptorInfo descriptors[] = {db.buffer, dcb.buffer, dccb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawcmdProgram.updateTemplate, drawcmdProgram.layout, 0, descriptors);
 
             vkCmdPushConstants(commandBuffers, drawcmdProgram.layout, drawcmdProgram.pushConstantStages, 0, sizeof(frustum), frustum);
             vkCmdDispatch(commandBuffers, uint32_t((draws.size() + 31) / 32), 1, 1);
 
-            VkBufferMemoryBarrier cmdEndBarrier = bufferBarrier(dcb.buffer, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
-            vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, 0, 1, &cmdEndBarrier, 0, 0);
+            VkBufferMemoryBarrier cullBarrier[2] = {
+                                                    bufferBarrier(dcb.buffer, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT),
+                                                    bufferBarrier(dccb.buffer, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT)
+                                                };
+            vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, 0, 2, cullBarrier, 0, 0);
             
             vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 3);
         }
@@ -841,22 +856,24 @@ int main(int argc, const char** argv)
         if (meshShadingSupported && meshShadingEnabled){
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineMS);
 
-            DescriptorInfo descriptors[] = {db.buffer, mb.buffer, mdb.buffer, vb.buffer};
+            DescriptorInfo descriptors[] = {dcb.buffer, db.buffer, mb.buffer, mdb.buffer, vb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgramMS.updateTemplate, meshProgramMS.layout, 0, descriptors);
             
             vkCmdPushConstants(commandBuffers, meshProgramMS.layout, meshProgramMS.pushConstantStages, 0, sizeof(globals), &globals);
-            vkCmdDrawMeshTasksIndirectNV(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirectMS), uint32_t(draws.size()), sizeof(MeshDrawCommand));
+            // vkCmdDrawMeshTasksIndirectNV(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirectMS), uint32_t(draws.size()), sizeof(MeshDrawCommand));
+            vkCmdDrawMeshTasksIndirectCountNV(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirectMS), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
         }
         else {
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
 
-            DescriptorInfo descriptors[] = {db.buffer, vb.buffer};
+            DescriptorInfo descriptors[] = {dcb.buffer, db.buffer, vb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgram.updateTemplate, meshProgram.layout, 0, descriptors);
 
             vkCmdBindIndexBuffer(commandBuffers, ib.buffer, 0, VK_INDEX_TYPE_UINT32);
 
             vkCmdPushConstants(commandBuffers, meshProgram.layout, meshProgram.pushConstantStages, 0, sizeof(globals), &globals);
-            vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
+            // vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
+            vkCmdDrawIndexedIndirectCount(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
         }
         vkCmdEndRenderPass(commandBuffers);
 
@@ -920,6 +937,10 @@ int main(int argc, const char** argv)
         
         VK_CHECK(vkDeviceWaitIdle(device));
         // fprintf(VkLogFile, "Debug : 4\n");
+        // uint32_t* countPtr = (uint32_t*)dccb.data;
+        // printf("drawCommandCount = %u\n", *countPtr);
+        // printf("indirect offset = %zu\n", offsetof(MeshDrawCommand, indirect));
+        // printf("indirectMS offset = %zu\n", offsetof(MeshDrawCommand, indirectMS));
 
         uint64_t queryResult[4];
         vkGetQueryPoolResults(device, queryPool, 0, ARRAYSIZE(queryResult), sizeof(queryResult), queryResult, sizeof(queryResult[0]), VK_QUERY_RESULT_64_BIT);
@@ -957,6 +978,7 @@ int main(int argc, const char** argv)
 
     destroyBuffer(db, device);
     destroyBuffer(dcb, device);
+    destroyBuffer(dccb, device);
 
     if (meshShadingSupported) {
         destroyBuffer(mb, device);
