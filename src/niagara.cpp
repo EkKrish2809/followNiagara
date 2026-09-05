@@ -160,14 +160,8 @@ struct alignas(16) MeshDraw{
     float scale;
     quat orientation;
 
-    vec3 center;
-    float radius;
-
-    int32_t vertexOffset;
-    uint32_t indexOffset;
-    uint32_t indexCount;
-    uint32_t meshletOffset;
-    uint32_t meshletCount;
+    uint32_t meshIndex;
+    uint32_t vertexOffset;
 
 };
 
@@ -183,18 +177,16 @@ struct Vertex{
     uint16_t tu, tv;
 };
 
-struct Mesh{
+struct alignas(16) Mesh{
     vec3 center;
     float radius;
 
-    uint32_t meshletOffset;
-    uint32_t meshletCount;
-
     uint32_t vertexOffset;
     uint32_t vertexCount;
-
     uint32_t indexOffset;
     uint32_t indexCount;
+    uint32_t meshletOffset;
+    uint32_t meshletCount;
 };
 
 struct Geometry{
@@ -434,14 +426,14 @@ bool loadMesh(Geometry& result, const char* path, bool buildMeshlets){
     mesh.center = center;
     mesh.radius = radius;
 
-    mesh.meshletOffset = meshletOffset;
-    mesh.meshletCount = meshletCount_;
-
     mesh.vertexOffset = vertexOffset;
     mesh.vertexCount = uint32_t(vertices.size());
-
+    
     mesh.indexOffset = indexOffset_;
     mesh.indexCount = uint32_t(indices.size());
+    
+    mesh.meshletOffset = meshletOffset;
+    mesh.meshletCount = meshletCount_;
 
     result.meshes.push_back(mesh);
 
@@ -471,6 +463,24 @@ mat4 perspectiveProjection(float fovY, float aspectWbyH, float zNear)
 
 vec4 normalizePlane(vec4 p){
     return p / glm::length(vec3(p));
+}
+
+double CalcFPS(){
+    static double previousTime = glfwGetTime();
+    static double fps = 0.0;
+    static unsigned int frameCount = 0;
+
+    double currentTime = glfwGetTime();
+    double elapsed = currentTime - previousTime;
+    ++frameCount;
+
+    if (elapsed >= 0.5) {
+        fps = double(frameCount) / elapsed;
+        previousTime = currentTime;
+        frameCount = 0;
+    }
+
+    return fps;
 }
 
 int main(int argc, const char** argv)
@@ -655,22 +665,26 @@ int main(int argc, const char** argv)
     Buffer vb = {};
     createBuffer(vb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
+    Buffer mb = {};
+    createBuffer(mb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
     Buffer ib = {};
     createBuffer(ib, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    Buffer mb = {};
+    Buffer mlb = {};
     Buffer mdb = {};
     if (meshShadingSupported){
-        createBuffer(mb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        createBuffer(mlb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         createBuffer(mdb, device, memoryProperties, 128 * 1024 * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
 
-    uploadBuffer(device, commandPool, commandBuffers, queue, vb, scratch, geometry.vertices.data(), geometry.vertices.size() * sizeof(Vertex));
+    uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, geometry.meshes.data(), geometry.meshes.size() * sizeof(Mesh));
     
+    uploadBuffer(device, commandPool, commandBuffers, queue, vb, scratch, geometry.vertices.data(), geometry.vertices.size() * sizeof(Vertex));
     uploadBuffer(device, commandPool, commandBuffers, queue, ib, scratch, geometry.indices.data(), geometry.indices.size() * sizeof(uint32_t));
 
     if (meshShadingSupported) {
-        uploadBuffer(device, commandPool, commandBuffers, queue, mb, scratch, geometry.meshlets.data(), geometry.meshlets.size() * sizeof(Meshlet));
+        uploadBuffer(device, commandPool, commandBuffers, queue, mlb, scratch, geometry.meshlets.data(), geometry.meshlets.size() * sizeof(Meshlet));
         uploadBuffer(device, commandPool, commandBuffers, queue, mdb, scratch, geometry.meshletdata.data(), geometry.meshletdata.size() * sizeof(uint32_t));
     }
 
@@ -692,7 +706,8 @@ int main(int argc, const char** argv)
 
     for (uint32_t i=0; i<drawCount; ++i){
 
-        const Mesh& mesh = geometry.meshes[rand() % geometry.meshes.size()];
+        size_t meshIndex = rand() % geometry.meshes.size();
+        const Mesh& mesh = geometry.meshes[meshIndex];
         // const Mesh& mesh = geometry.meshes[0];
 
         draws[i].position[0] = float(rand()) / RAND_MAX * 100 - 50; 
@@ -705,15 +720,9 @@ int main(int argc, const char** argv)
 
         draws[i].orientation = glm::rotate(quat(1, 0, 0, 0), angle, axis);
         
-        draws[i].center = mesh.center;
-        draws[i].radius = mesh.radius;
-
+        draws[i].meshIndex = uint32_t(meshIndex);
         draws[i].vertexOffset = mesh.vertexOffset;
-        draws[i].indexOffset = mesh.indexOffset;
-        draws[i].indexCount = mesh.indexCount;
-        draws[i].meshletOffset = mesh.meshletOffset;
-        draws[i].meshletCount = mesh.meshletCount;
-
+        
         triangleCount += mesh.indexCount / 3;
     }
 
@@ -806,7 +815,7 @@ int main(int argc, const char** argv)
 
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_COMPUTE, drawcmdPipeline);
 
-            DescriptorInfo descriptors[] = {db.buffer, dcb.buffer, dccb.buffer};
+            DescriptorInfo descriptors[] = {db.buffer, mb.buffer, dcb.buffer, dccb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawcmdProgram.updateTemplate, drawcmdProgram.layout, 0, descriptors);
 
             vkCmdPushConstants(commandBuffers, drawcmdProgram.layout, drawcmdProgram.pushConstantStages, 0, sizeof(frustum), frustum);
@@ -856,7 +865,7 @@ int main(int argc, const char** argv)
         if (meshShadingSupported && meshShadingEnabled){
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineMS);
 
-            DescriptorInfo descriptors[] = {dcb.buffer, db.buffer, mb.buffer, mdb.buffer, vb.buffer};
+            DescriptorInfo descriptors[] = {dcb.buffer, db.buffer, mlb.buffer, mdb.buffer, vb.buffer};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, meshProgramMS.updateTemplate, meshProgramMS.layout, 0, descriptors);
             
             vkCmdPushConstants(commandBuffers, meshProgramMS.layout, meshProgramMS.pushConstantStages, 0, sizeof(globals), &globals);
@@ -953,10 +962,11 @@ int main(int argc, const char** argv)
 
         double trianglesPerSec = double(triangleCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
         double drawsPerSec = double(drawCount) / double((frameGpuEnd - frameGpuBegin) * 1e-3);
+        double fps = CalcFPS();
         
         char title[256];
-        sprintf(title, "cpu: %.3f ms; gpu: %.3f ms; (cull: %.3f); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; culling: %s",
-             (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), cullGpuTime, double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF");
+        sprintf(title, "fps: %.1f; cpu: %.3f ms; gpu: %.3f ms; (cull: %.3f); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; culling: %s",
+               fps, (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), cullGpuTime, double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF");
         glfwSetWindowTitle(window, title);
     }
 
@@ -981,7 +991,7 @@ int main(int argc, const char** argv)
     destroyBuffer(dccb, device);
 
     if (meshShadingSupported) {
-        destroyBuffer(mb, device);
+        destroyBuffer(mlb, device);
         destroyBuffer(mdb, device);
     }
     

@@ -9,6 +9,9 @@
 
 #include "mesh.h"
 
+// the ballot code assumes gl_SugroupSize == 32, which needs to be revised for non-Nvidia
+#define BALLOT 1
+
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform block {
@@ -19,11 +22,15 @@ layout(binding=0) readonly buffer Draws{
     MeshDraw draws[];
 };
 
-layout(binding=1) writeonly buffer DrawCommands{
+layout(binding=1) readonly buffer Meshes{
+    Mesh meshes[];
+};
+
+layout(binding=2) writeonly buffer DrawCommands{
     MeshDrawCommand drawCommands[];
 };
 
-layout(binding=2) buffer DrawCommandCount{
+layout(binding=3) buffer DrawCommandCount{
     uint drawCommandCount;
 };
 
@@ -34,9 +41,12 @@ void main() {
     uint di = gi * 32 + ti;
     // if (di >= draws.length()) return;
 
-    vec3 center = draws[di].center * draws[di].scale + draws[di].position;
-    float radius = draws[di].radius * draws[di].scale;
+    Mesh mesh = meshes[draws[di].meshIndex];
 
+    vec3 center = mesh.center * draws[di].scale + draws[di].position;
+    float radius = mesh.radius * draws[di].scale;
+
+#if BALLOT
     bool visible = true;
     for (int i=0; i < 6; ++i){
         visible = visible && dot(frustum[i], vec4(center, 1)) > -radius;
@@ -56,18 +66,22 @@ void main() {
     
     uint index = subgroupBallotExclusiveBitCount(ballot);
     uint dci = subgroupBroadcastFirst(dcgi) + index;    // broadcasts the 'dcgi' to all the threads running this compute shader
+#endif
 
     if (visible){
-        // uint dci = dcgi;
+#if !BALLOT
+    uint dci = atomicAdd(drawCommandCount, 1);
+#endif
+
 
         drawCommands[dci].drawId = di;
-        drawCommands[dci].indexCount = draws[di].indexCount;
-        drawCommands[dci].instanceCount = visible ? 1 : 0;
-        drawCommands[dci].firstIndex = draws[di].indexOffset;
-        drawCommands[dci].vertexOffset = draws[di].vertexOffset;
+        drawCommands[dci].indexCount = mesh.indexCount;
+        drawCommands[dci].instanceCount = 1;
+        drawCommands[dci].firstIndex = mesh.indexOffset;
+        drawCommands[dci].vertexOffset = mesh.vertexOffset;
         drawCommands[dci].firstInstance = 0;
-        drawCommands[dci].taskCount = visible ? (draws[di].meshletCount + 31) / 32 : 0;
-        drawCommands[dci].firstTask = draws[di].meshletOffset / 32;
+        drawCommands[dci].taskCount = (mesh.meshletCount + 31) / 32;
+        drawCommands[dci].firstTask = mesh.meshletOffset / 32;
 
     }
 
