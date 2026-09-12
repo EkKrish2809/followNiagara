@@ -6,6 +6,10 @@ struct Shader {
 
     uint32_t storageBufferMask;
 
+    uint32_t localSizeX;
+    uint32_t localSizeY;
+    uint32_t localSizeZ;
+
     bool usesPushConstant;
 };
 

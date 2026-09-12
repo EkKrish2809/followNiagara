@@ -863,7 +863,7 @@ int main(int argc, const char** argv)
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawcmdProgram.updateTemplate, drawcmdProgram.layout, 0, descriptors);
 
             vkCmdPushConstants(commandBuffers, drawcmdProgram.layout, drawcmdProgram.pushConstantStages, 0, sizeof(cullData), &cullData);
-            vkCmdDispatch(commandBuffers, uint32_t((draws.size() + 31) / 32), 1, 1);
+            vkCmdDispatch(commandBuffers, uint32_t((draws.size() + drawcmdCS.localSizeX - 1) / drawcmdCS.localSizeX), 1, 1);
 
             VkBufferMemoryBarrier cullBarrier[2] = {
                                                     bufferBarrier(dcb.buffer, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_INDIRECT_COMMAND_READ_BIT),
