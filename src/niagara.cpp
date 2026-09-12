@@ -123,11 +123,16 @@ VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass renderPass, VkImag
     return framebuffer;
 }
 
-VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount){
+VkQueryPool createQueryPool(VkDevice device, uint32_t queryCount, VkQueryType queryType){
 
     VkQueryPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-    createInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    createInfo.queryType = queryType;
     createInfo.queryCount = queryCount;
+
+    if (queryType == VK_QUERY_TYPE_PIPELINE_STATISTICS){
+        createInfo.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT ;
+        printf("Query Type is VK_QUERY_TYPE_PIPELINE_STATISTICS\n");
+    }
 
     VkQueryPool queryPool = 0;
     VK_CHECK(vkCreateQueryPool(device, &createInfo, 0, &queryPool));
@@ -666,8 +671,11 @@ int main(int argc, const char** argv)
     Swapchain swapchain;
     createSwapchain(swapchain, physicalDevice, device, surface, familyIndex, swapchainFormat, winWidth, winHeight, renderPass);
 
-    VkQueryPool queryPool = createQueryPool(device, 128);
-    assert(queryPool);
+    VkQueryPool queryPoolTimestamp = createQueryPool(device, 128, VK_QUERY_TYPE_TIMESTAMP);
+    assert(queryPoolTimestamp);
+
+    VkQueryPool queryPoolPipeline = createQueryPool(device, 1, VK_QUERY_TYPE_PIPELINE_STATISTICS);
+    assert(queryPoolPipeline);
 
     // commandpool
     VkCommandPool commandPool = createCommandPool(device, familyIndex);
@@ -726,7 +734,7 @@ int main(int argc, const char** argv)
     fprintf(VkLogFile, "\n==================================================================================================================\n");
 
 
-    uint32_t drawCount = 500000;
+    uint32_t drawCount = 50000;
 
     // TODO: Remove the need of this padding
 
@@ -734,9 +742,9 @@ int main(int argc, const char** argv)
 
     srand(42);
 
-    uint32_t triangleCount = 0;
-    float sceneRadius = 300;
-    float drawDistance = 300;
+    // uint32_t triangleCount = 0;
+    float sceneRadius = 100;
+    float drawDistance = 100;
 
     for (uint32_t i=0; i<drawCount; ++i){
 
@@ -757,7 +765,7 @@ int main(int argc, const char** argv)
         draws[i].meshIndex = uint32_t(meshIndex);
         draws[i].vertexOffset = mesh.vertexOffset;
         
-        triangleCount += mesh.lods[0].indexCount / 3;
+        // triangleCount += mesh.lods[0].indexCount / 3;
     }
 
     Buffer db = {};
@@ -818,15 +826,17 @@ int main(int argc, const char** argv)
 
         VK_CHECK(vkBeginCommandBuffer(commandBuffers, &beginInfo));
 
-        vkCmdResetQueryPool(commandBuffers, queryPool, 0, 128);
-        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 0);
+        vkCmdResetQueryPool(commandBuffers, queryPoolTimestamp, 0, 128);
+        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 0);
+        
+
 
         // fprintf(VkLogFile, "Debug : 1\n");
         mat4 projection = perspectiveProjection(glm::radians(70.f), float(swapchain.width) / float(swapchain.height), 0.01f);
 
         // run compute pipeline
         {
-            vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 2);
+            vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 2);
             
             mat4 projectionT = glm::transpose(projection);
 
@@ -861,7 +871,7 @@ int main(int argc, const char** argv)
                                                 };
             vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, 0, 2, cullBarrier, 0, 0);
             
-            vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 3);
+            vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 3);
         }
 
 
@@ -871,6 +881,9 @@ int main(int argc, const char** argv)
         };
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(renderBeginBarrier), renderBeginBarrier);
         // fprintf(VkLogFile, "Debug : 2\n");
+
+        vkCmdResetQueryPool(commandBuffers, queryPoolPipeline, 0, 1);
+        vkCmdBeginQuery(commandBuffers, queryPoolPipeline, 0, 0);
         
         VkClearValue clearColor[2] = {};
         clearColor[0].color = {48.0f / 255.0f, 10.0f / 255.0f, 36.0f / 255.0f, 1};
@@ -916,7 +929,7 @@ int main(int argc, const char** argv)
 
             vkCmdPushConstants(commandBuffers, meshProgram.layout, meshProgram.pushConstantStages, 0, sizeof(globals), &globals);
             // vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
-            vkCmdDrawIndexedIndirectCount(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
+            vkCmdDrawIndexedIndirectCountKHR(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
         }
         vkCmdEndRenderPass(commandBuffers);
 
@@ -946,7 +959,10 @@ int main(int argc, const char** argv)
         // VkImageMemoryBarrier renderEndBarrier = imageBarrier(swapchain.images[imageIndex], VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         // vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &renderEndBarrier);
 
-        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
+        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 1);
+
+        // vkCmdEndQuery(commandBuffers, queryPoolTimestamp, 0);
+        vkCmdEndQuery(commandBuffers, queryPoolPipeline, 0);
 
         VK_CHECK(vkEndCommandBuffer(commandBuffers));
 
@@ -985,12 +1001,19 @@ int main(int argc, const char** argv)
         // printf("indirect offset = %zu\n", offsetof(MeshDrawCommand, indirect));
         // printf("indirectMS offset = %zu\n", offsetof(MeshDrawCommand, indirectMS));
 
-        uint64_t queryResult[4];
-        vkGetQueryPoolResults(device, queryPool, 0, ARRAYSIZE(queryResult), sizeof(queryResult), queryResult, sizeof(queryResult[0]), VK_QUERY_RESULT_64_BIT);
+        uint64_t timeStampResult[4] = {};
+        VK_CHECK(vkGetQueryPoolResults(device, queryPoolTimestamp, 0, ARRAYSIZE(timeStampResult), sizeof(timeStampResult), timeStampResult, sizeof(timeStampResult[0]), VK_QUERY_RESULT_64_BIT));
+        
+        uint32_t pipelineResults[1] = {};
+        VK_CHECK(vkGetQueryPoolResults(device, queryPoolPipeline, 0, 1, sizeof(pipelineResults), pipelineResults, sizeof(pipelineResults), 0));
 
-        double frameGpuBegin = double(queryResult[0]) * props.limits.timestampPeriod * 1e-6;
-        double frameGpuEnd = double(queryResult[1]) * props.limits.timestampPeriod * 1e-6;
-        double cullGpuTime = double(queryResult[3] - queryResult[2]) * props.limits.timestampPeriod * 1e-6;
+        // how to manage calls to 2 vkGetQueryPoolResults
+
+        uint32_t triangleCount = pipelineResults[0];
+
+        double frameGpuBegin = double(timeStampResult[0]) * props.limits.timestampPeriod * 1e-6;
+        double frameGpuEnd = double(timeStampResult[1]) * props.limits.timestampPeriod * 1e-6;
+        double cullGpuTime = double(timeStampResult[3] - timeStampResult[2]) * props.limits.timestampPeriod * 1e-6;
 
         double frameEnd = glfwGetTime() * 1000.0;
 
@@ -1039,7 +1062,8 @@ int main(int argc, const char** argv)
     vkFreeCommandBuffers(device, commandPool, 1, &commandBuffers);
     vkDestroyCommandPool(device, commandPool, 0);
 
-    vkDestroyQueryPool(device, queryPool, 0);
+    vkDestroyQueryPool(device, queryPoolTimestamp, 0);
+    vkDestroyQueryPool(device, queryPoolPipeline, 0);
 
     vkQueueWaitIdle(queue);
 

@@ -200,7 +200,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice *physicalDevices, uint32_t 
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(physicalDevices[i], &props);
 
-        // printf("GPU %d : %s\n", i, props.deviceName);
+        printf("GPU %d : %s\n", i, props.deviceName);
 
         uint32_t familyIndex = getGraphicsFamilyIndex(physicalDevices[i]);
         if (familyIndex == VK_QUEUE_FAMILY_IGNORED){
@@ -266,6 +266,7 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     VkPhysicalDeviceFeatures2 features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.features.vertexPipelineStoresAndAtomics = true;
     features.features.multiDrawIndirect = VK_TRUE;
+    features.features.pipelineStatisticsQuery = VK_TRUE;
 
     VkPhysicalDevice16BitStorageFeatures feature16 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
     feature16.storageBuffer16BitAccess = true;

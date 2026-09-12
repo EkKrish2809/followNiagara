@@ -52,8 +52,8 @@ void main() {
     vec3 center = mesh.center * draws[di].scale + draws[di].position;
     float radius = mesh.radius * draws[di].scale;
 
-#if BALLOT
     bool visible = true;
+#if BALLOT
     for (int i=0; i < 6; ++i){
         visible = visible && dot(frustum[i], vec4(center, 1)) > -radius;
     }
