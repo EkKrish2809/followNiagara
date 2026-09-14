@@ -40,6 +40,7 @@ bool meshShadingEnabled = true;
 bool cullingEnabled = true;
 bool lodEnabled = true;
 bool debugPyramid = false;
+int debugPyramidLevel = 0;
 
 FILE *VkLogFile = stderr;
 
@@ -212,11 +213,15 @@ struct Geometry{
     std::vector<Mesh> meshes;
 };
 
-struct DrawCullData {
+struct alignas(16) DrawCullData {
     vec4 frustum[6];
     uint32_t drawCount;
     int cullingEnabled;
     int lodEnabled;
+};
+
+struct alignas(16) DepthReduceData {
+    vec2 imageSize;
 };
 
 float halfToFloat(uint16_t v){
@@ -492,6 +497,9 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         if (key == GLFW_KEY_P){
             debugPyramid = !debugPyramid;
         }
+        if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9){
+            debugPyramidLevel = key - GLFW_KEY_0;
+        }
     }
 }
 
@@ -625,6 +633,10 @@ int main(int argc, const char** argv)
     VkRenderPass renderPassLate = createRenderPass(device, swapchainFormat, depthFormat, /*late*/ true);
     assert(renderPassLate);
 
+    // create depth sampler for occlusion culling
+    VkSampler depthSampler = createSampler(device);
+    assert(depthSampler);
+
     bool rcs = false;
     // shader module
     // compute shader
@@ -662,7 +674,7 @@ int main(int argc, const char** argv)
     // compute pipeline will actually attach layout from above program
     VkPipeline drawcmdPipeline = createComputePipeline(device, pipelineCache, drawcmdCS, drawcmdProgram.layout);
     
-    Program depthreduceProgram = createProgram(device, VK_PIPELINE_BIND_POINT_COMPUTE, {&depthreduceCS}, 0);
+    Program depthreduceProgram = createProgram(device, VK_PIPELINE_BIND_POINT_COMPUTE, {&depthreduceCS}, sizeof(DepthReduceData));
     VkPipeline depthreducePipeline = createComputePipeline(device, pipelineCache, depthreduceCS, depthreduceProgram.layout);
 
     // graphics pipeline layout
@@ -865,7 +877,7 @@ int main(int argc, const char** argv)
         vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 0);
 
         // fprintf(VkLogFile, "Debug : 1\n");
-        mat4 projection = perspectiveProjection(glm::radians(70.f), float(swapchain.width) / float(swapchain.height), 0.01f);
+        mat4 projection = perspectiveProjection(glm::radians(70.f), float(swapchain.width) / float(swapchain.height), 1.f);
 
         // run compute pipeline
         {
@@ -972,6 +984,8 @@ int main(int argc, const char** argv)
              imageBarrier(depthPyramid.image, 0, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL),
         };
 
+        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 4);
+
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(depthReadBarriers), depthReadBarriers);
 
         // depth pyramid pipeline binding
@@ -979,13 +993,18 @@ int main(int argc, const char** argv)
 
         for (uint32_t i = 0; i <depthPyramidLevels; ++i){
 
-            DescriptorInfo sourceDepth = (i == 0) ? DescriptorInfo(depthTarget.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) : DescriptorInfo(depthPyramidMips[i - 1], VK_IMAGE_LAYOUT_GENERAL);
+            DescriptorInfo sourceDepth = (i == 0) ? 
+                            DescriptorInfo(depthSampler, depthTarget.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) : 
+                            DescriptorInfo(depthSampler, depthPyramidMips[i - 1], VK_IMAGE_LAYOUT_GENERAL);
 
             DescriptorInfo descriptors[] = {{depthPyramidMips[i], VK_IMAGE_LAYOUT_GENERAL}, sourceDepth};
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, depthreduceProgram.updateTemplate, depthreduceProgram.layout, 0, descriptors);
 
             uint32_t levelWidth = std::max(1u, (swapchain.width / 2) >> i);
             uint32_t levelHeight = std::max(1u, (swapchain.height / 2) >> i);
+
+            DepthReduceData reduceData = {vec2(levelWidth, levelHeight)};
+            vkCmdPushConstants(commandBuffers, depthreduceProgram.layout, depthreduceProgram.pushConstantStages, 0, sizeof(reduceData), &reduceData);
             vkCmdDispatch(commandBuffers, getGroupCount(levelWidth, depthreduceCS.localSizeX), getGroupCount(levelHeight, depthreduceCS.localSizeY), 1);
 
             VkImageMemoryBarrier reduceBarrier = imageBarrier(depthPyramid.image, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
@@ -997,6 +1016,8 @@ int main(int argc, const char** argv)
         VkImageMemoryBarrier depthWriteBarrier = imageBarrier(depthTarget.image, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
 
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 1, &depthWriteBarrier);
+
+        vkCmdWriteTimestamp(commandBuffers, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPoolTimestamp, 5);
 
         VkRenderPassBeginInfo passLateBeginInfo = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         passLateBeginInfo.renderPass = renderPassLate;
@@ -1017,16 +1038,15 @@ int main(int argc, const char** argv)
         vkCmdPipelineBarrier(commandBuffers, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, ARRAYSIZE(copyBarrier), copyBarrier);
 
         if (debugPyramid){
-            uint32_t debugLevel = 1;
-
+            
             VkImageBlit blitRegion = {};
             blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blitRegion.srcSubresource.mipLevel = debugLevel;
+            blitRegion.srcSubresource.mipLevel = debugPyramidLevel;
             blitRegion.srcSubresource.layerCount = 1;
             blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             blitRegion.dstSubresource.layerCount = 1;
             blitRegion.srcOffsets[0] = {0, 0, 0};
-            blitRegion.srcOffsets[1] = {int32_t(std::max(1u, (swapchain.width / 2) >> debugLevel)), int32_t(std::max(1u, (swapchain.height / 2) >> debugLevel)), 1};
+            blitRegion.srcOffsets[1] = {int32_t(std::max(1u, (swapchain.width / 2) >> debugPyramidLevel)), int32_t(std::max(1u, (swapchain.height / 2) >> debugPyramidLevel)), 1};
             blitRegion.dstOffsets[0] = {0, 0, 0};
             blitRegion.dstOffsets[1] = {int32_t(swapchain.width), int32_t(swapchain.height), 1};
 
@@ -1092,7 +1112,7 @@ int main(int argc, const char** argv)
         // printf("indirect offset = %zu\n", offsetof(MeshDrawCommand, indirect));
         // printf("indirectMS offset = %zu\n", offsetof(MeshDrawCommand, indirectMS));
 
-        uint64_t timeStampResult[4] = {};
+        uint64_t timeStampResult[6] = {};
         VK_CHECK(vkGetQueryPoolResults(device, queryPoolTimestamp, 0, ARRAYSIZE(timeStampResult), sizeof(timeStampResult), timeStampResult, sizeof(timeStampResult[0]), VK_QUERY_RESULT_64_BIT));
         
         uint32_t pipelineResults[1] = {};
@@ -1105,6 +1125,7 @@ int main(int argc, const char** argv)
         double frameGpuBegin = double(timeStampResult[0]) * props.limits.timestampPeriod * 1e-6;
         double frameGpuEnd = double(timeStampResult[1]) * props.limits.timestampPeriod * 1e-6;
         double cullGpuTime = double(timeStampResult[3] - timeStampResult[2]) * props.limits.timestampPeriod * 1e-6;
+        double pyramidGpuTime = double(timeStampResult[5] - timeStampResult[4]) * props.limits.timestampPeriod * 1e-6;
 
         double frameEnd = glfwGetTime() * 1000.0;
 
@@ -1113,8 +1134,8 @@ int main(int argc, const char** argv)
         double fps = CalcFPS();
         
         char title[256];
-        sprintf(title, "fps: %.1f; cpu: %.3f ms; gpu: %.3f ms; (cull: %.3f); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; culling: %s; level-of-details: %s",
-               fps, (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), cullGpuTime, double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF", lodEnabled ? "ON" : "OFF");
+        sprintf(title, "fps: %.1f; cpu: %.3f ms; gpu: %.3f ms; (cull: %.2f ms, pyramid: %.2f ms); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; culling: %s; level-of-details: %s",
+               fps, (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), cullGpuTime, pyramidGpuTime, double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF", lodEnabled ? "ON" : "OFF");
         glfwSetWindowTitle(window, title);
     }
 
@@ -1191,6 +1212,8 @@ int main(int argc, const char** argv)
         destroyShaderModule(meshletTS, device);
         destroyShaderModule(meshletMS, device);
     }
+
+    vkDestroySampler(device, depthSampler, 0);
 
     vkDestroyRenderPass(device, renderPass, 0);
     vkDestroyRenderPass(device, renderPassLate, 0);
