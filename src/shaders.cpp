@@ -6,10 +6,10 @@
 #include <spirv/unified1/spirv.h>
 
 struct Id{
-    enum Kind {Unknown, Variable};
+    enum Kind {Unknown = 0, Variable, TypePointer, TypeStruct, TypeImage, TypeSampler, TypeSampledImage};
 
     Kind kind = Unknown;
-    uint32_t type;
+    uint32_t typeId;
     uint32_t storageClass;
     uint32_t binding;
     uint32_t set;
@@ -88,16 +88,68 @@ static void parseShader(Shader& shader, const uint32_t* code, uint32_t codeSize)
                 break;
             }
         }break;
-        case SpvOpVariable:
+        case SpvOpTypeStruct:
         {
             assert(wordCount >= 2);
+
+            uint32_t id = insn[1];
+            assert(id < idBound);
+
+            assert(ids[id].kind == Id::Unknown );
+            ids[id].kind = Id::TypeStruct;
+        }break;
+        case SpvOpTypeImage:
+        {
+            assert(wordCount >= 2);
+
+            uint32_t id = insn[1];
+            assert(id < idBound);
+
+            assert(ids[id].kind == Id::Unknown );
+            ids[id].kind = Id::TypeImage;
+        }break;
+        case SpvOpTypeSampler:
+        {
+            assert(wordCount >= 2);
+
+            uint32_t id = insn[1];
+            assert(id < idBound);
+
+            assert(ids[id].kind == Id::Unknown );
+            ids[id].kind = Id::TypeSampler;
+        }break;
+        case SpvOpTypeSampledImage:
+        {
+            assert(wordCount >= 2);
+
+            uint32_t id = insn[1];
+            assert(id < idBound);
+
+            assert(ids[id].kind == Id::Unknown );
+            ids[id].kind = Id::TypeSampledImage;
+        }break;
+        case SpvOpTypePointer:
+        {
+            assert(wordCount == 4);
+
+            uint32_t id = insn[1];
+            assert(id < idBound);
+
+            assert(ids[id].kind == Id::Unknown );
+            ids[id].kind = Id::TypePointer;
+            ids[id].typeId = insn[3];
+            ids[id].storageClass = insn[2];
+        }break;
+        case SpvOpVariable:
+        {
+            assert(wordCount >= 4);
 
             uint32_t id = insn[2];
             assert(id < idBound);
 
             assert(ids[id].kind == Id::Unknown );
             ids[id].kind = Id::Variable;
-            ids[id].type = insn[1];
+            ids[id].typeId = insn[1];
             ids[id].storageClass = insn[3];
         }break;
         default:
@@ -109,13 +161,35 @@ static void parseShader(Shader& shader, const uint32_t* code, uint32_t codeSize)
     }
 
     for (auto& id : ids){
-        if (id.kind == Id::Variable && (id.storageClass == SpvStorageClassUniform || id.storageClass == SpvStorageClassStorageBuffer)){
+        if (id.kind == Id::Variable && (id.storageClass == SpvStorageClassUniform || id.storageClass == SpvStorageClassStorageBuffer || id.storageClass == SpvStorageClassUniformConstant)){
             // assume that id.type refers to a pointer to the storageBuffer
             assert(id.set == 0);
             assert(id.binding < 32);
+            assert(ids[id.typeId].kind == Id::TypePointer);
             // assert((shader.storageBufferMask & (1 << id.binding)) == 0);
 
-            shader.storageBufferMask |= 1 << id.binding;
+            Id::Kind typeKind = ids[ids[id.typeId].typeId].kind;
+
+            switch(typeKind){
+                case Id::TypeStruct:
+                    shader.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    shader.resourceMask |= 1 << id.binding;
+                    break;
+                case Id::TypeImage:
+                    shader.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    shader.resourceMask |= 1 << id.binding;
+                    break;
+                case Id::TypeSampler:
+                    shader.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    shader.resourceMask |= 1 << id.binding;
+                    break;
+                case Id::TypeSampledImage:
+                    shader.resourceTypes[id.binding] = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                    shader.resourceMask |= 1 << id.binding;
+                    break;
+                default:
+                    assert(!"Unknown resource type!");
+            }
         }
 
         if (id.kind == Id::Variable && id.storageClass == SpvStorageClassPushConstant){
@@ -124,26 +198,46 @@ static void parseShader(Shader& shader, const uint32_t* code, uint32_t codeSize)
     }
 }
 
+static uint32_t gatherResourceS(Shaders shaders, VkDescriptorType(&resourceTypes)[32]){
+    uint32_t resourceMask = 0;
+
+    for (const Shader* shader : shaders){
+        for (uint32_t i = 0; i < 32; ++i){
+            if (shader->resourceMask & (1 << i)){
+                if (resourceMask & (1 << i)){
+                    assert(resourceTypes[i] == shader->resourceTypes[i]);
+                } else {
+                    resourceTypes[i] = shader->resourceTypes[i];
+                    resourceMask |= 1 << i;
+                }
+            }
+        }
+    }
+
+    return resourceMask;
+}
+
 
 static VkDescriptorSetLayout createSetLayout(VkDevice device, Shaders shaders) {
 
     std::vector<VkDescriptorSetLayoutBinding> setBindings = {};
 
-    uint32_t storageBufferMask = 0;
+    VkDescriptorType resourceTypes[32] = {};
+    uint32_t resourceMask = gatherResourceS(shaders, resourceTypes);
     for (const Shader* shader : shaders){
-        storageBufferMask |= shader->storageBufferMask;
+        resourceMask |= shader->resourceMask;
     }
 
     for (uint32_t i = 0; i < 32; ++i){
-        if (storageBufferMask & (1 << i)){
+        if (resourceMask & (1 << i)){
             VkDescriptorSetLayoutBinding bindings = {};
             bindings.binding = i;
-            bindings.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings.descriptorType = resourceTypes[i];
             bindings.descriptorCount = 1;
 
             // bindings.stageFlags = 0;
             for (const Shader* shader : shaders){
-                if (storageBufferMask & (1 << i)){
+                if (resourceMask & (1 << i)){
                     bindings.stageFlags |= shader->stage;
                 }
             }
@@ -168,18 +262,16 @@ static VkDescriptorUpdateTemplate createUpdateTemplate(VkDevice device, VkPipeli
 
     std::vector<VkDescriptorUpdateTemplateEntry> entries;
 
-    uint32_t storageBufferMask = 0;
-    for (const Shader* shader : shaders){
-        storageBufferMask |= shader->storageBufferMask;
-    }
+    VkDescriptorType resourceTypes[32] = {};
+    uint32_t resourceMask = gatherResourceS(shaders, resourceTypes);
 
     for (uint32_t i = 0; i < 32; ++i){
-        if (storageBufferMask & (1 << i)){
+        if (resourceMask & (1 << i)){
             VkDescriptorUpdateTemplateEntry entry = {};
             entry.dstBinding = i;
             entry.dstArrayElement = 0;
             entry.descriptorCount = 1;
-            entry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            entry.descriptorType = resourceTypes[i];
             entry.offset = sizeof(DescriptorInfo) * i;
             entry.stride = sizeof(DescriptorInfo);
 
