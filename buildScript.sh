@@ -2,6 +2,8 @@ rm ./a.out
 
 # compile compute shader
 glslc src/shaders/drawcmd.comp -c --target-spv=spv1.3 -o src/shaders/drawcmd.comp.spv
+glslc src/shaders/depthreduce.comp -c --target-spv=spv1.3 -o src/shaders/depthreduce.comp.spv
+glslc src/shaders/drawculllate.comp -c --target-spv=spv1.3 -o src/shaders/drawculllate.comp.spv
 
 # compile other shaders
 glslc src/shaders/mesh.vert -o src/shaders/mesh.vert.spv
@@ -27,4 +29,5 @@ FILES=(
 
 g++ "${FILES[@]}" -g3 -lglfw -lvulkan -lX11
 
-./a.out asset/treasurebox.obj asset/kitten.obj 
+./a.out  asset/kitten.obj 
+# asset/treasurebox.obj

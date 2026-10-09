@@ -214,6 +214,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice *physicalDevices, uint32_t 
             continue;
 
         if (!discrete && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+        // if (!discrete && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
         {
             // printf("discrete GPU : %s\n", props.deviceName);
             discrete = physicalDevices[i];
