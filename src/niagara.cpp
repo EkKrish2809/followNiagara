@@ -690,7 +690,7 @@ int main(int argc, const char** argv)
     assert(renderPassLate);
 
     // create depth sampler for occlusion culling
-    VkSampler depthSampler = createSampler(device);
+    VkSampler depthSampler = createSampler(device, VK_SAMPLER_REDUCTION_MODE_MIN_EXT);
     assert(depthSampler);
 
     bool rcs = false;
@@ -1137,7 +1137,7 @@ int main(int argc, const char** argv)
 
             DescriptorInfo pyramidDesc(depthSampler, depthPyramid.imageView, VK_IMAGE_LAYOUT_GENERAL);
             DescriptorInfo descriptors[] = {db.buffer, mb.buffer, dcb.buffer, dccb.buffer, dvb.buffer, pyramidDesc };
-            
+
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawculllateProgram.updateTemplate, drawculllateProgram.layout, 0, descriptors);
 
             vkCmdPushConstants(commandBuffers, drawculllateProgram.layout, drawculllateProgram.pushConstantStages, 0, sizeof(cullData), &cullData);

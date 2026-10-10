@@ -373,6 +373,9 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineCache pipelineCache
     createInfo.pDepthStencilState = &depthStencilStateCreateInfo;
 
     VkPipelineColorBlendAttachmentState colorAttachmentState = {};
+    colorAttachmentState.blendEnable = VK_FALSE;
+    colorAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
     colorAttachmentState.colorWriteMask = VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
     VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
