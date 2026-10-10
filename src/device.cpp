@@ -122,9 +122,11 @@ void destroyDebugUtilsMessenger(VkInstance instance)
 
 //////////////////////////////////////////////////////////////////////////////////////////
 VkInstance createInstance(){
+    assert(volkGetInstanceVersion() >= VK_API_VERSION_1_2);
+
     // This is SHORTCUT, in real prod application we should first check if 1.1 is available using  vkEnumerateInstanceVersion
     VkApplicationInfo appInfo = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    appInfo.apiVersion = VK_API_VERSION_1_1;
+    appInfo.apiVersion = VK_API_VERSION_1_2;
 
     VkInstanceCreateInfo createInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     createInfo.pApplicationInfo = &appInfo;
@@ -210,7 +212,7 @@ VkPhysicalDevice pickPhysicalDevice(VkPhysicalDevice *physicalDevices, uint32_t 
             continue;
         }
 
-        if (props.apiVersion < VK_API_VERSION_1_1)
+        if (props.apiVersion < VK_API_VERSION_1_2)
             continue;
 
         if (!discrete && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
@@ -254,11 +256,11 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     std::vector<const char*> extensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-        VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-        VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
-        VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
-        VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
-        VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME,
+        // VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+        // VK_KHR_8BIT_STORAGE_EXTENSION_NAME,
+        // VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+        // VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
+        // VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME,
     };
     if (rtxSupported){
         extensions.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
@@ -270,14 +272,26 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     features.features.multiDrawIndirect = VK_TRUE;
     features.features.pipelineStatisticsQuery = VK_TRUE;
 
-    VkPhysicalDevice16BitStorageFeatures feature16 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
-    feature16.storageBuffer16BitAccess = true;
-    feature16.uniformAndStorageBuffer16BitAccess = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features features12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    features12.drawIndirectCount = VK_TRUE;
+    features12.storageBuffer8BitAccess = VK_TRUE;
+    features12.uniformAndStorageBuffer8BitAccess = VK_TRUE;
+    features12.storagePushConstant8 = VK_TRUE;
+    features12.shaderFloat16 = VK_TRUE;
+    features12.shaderInt8 = VK_TRUE;
+    features12.samplerFilterMinmax = VK_TRUE;
+    features12.scalarBlockLayout = VK_TRUE;
+    features12.bufferDeviceAddress = VK_TRUE;
 
-    VkPhysicalDevice8BitStorageFeaturesKHR features8 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR};
-    features8.storageBuffer8BitAccess = true;
-    features8.uniformAndStorageBuffer8BitAccess = true; // TODO : this might be glslang bug , this is solving validation error from
-                                                        // Day 4 code, but is this necessary and if yes, why ?
+
+    // VkPhysicalDevice16BitStorageFeatures feature16 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES};
+    // feature16.storageBuffer16BitAccess = true;
+    // feature16.uniformAndStorageBuffer16BitAccess = VK_TRUE;
+
+    // VkPhysicalDevice8BitStorageFeaturesKHR features8 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES_KHR};
+    // features8.storageBuffer8BitAccess = true;
+    // features8.uniformAndStorageBuffer8BitAccess = true; // TODO : this might be glslang bug , this is solving validation error from
+    //                                                     // Day 4 code, but is this necessary and if yes, why ?
                                                         
     // enabling shaderDrawParameter for using gl_DrawIdxxx inside shader
     // VkPhysicalDeviceVulkan11Features features11 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
@@ -288,7 +302,6 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     VkPhysicalDeviceMeshShaderFeaturesNV featureMesh = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV};
     featureMesh.meshShader = true;
     featureMesh.taskShader = true;
-    // featureMesh.pNext = &features11;
 
     VkDeviceCreateInfo pDeviceCreateInfo = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     pDeviceCreateInfo.queueCreateInfoCount = 1;
@@ -297,11 +310,10 @@ VkDevice createDevice(VkInstance instance, VkPhysicalDevice physicalDevice, uint
     pDeviceCreateInfo.enabledExtensionCount = uint32_t(extensions.size());
     // pDeviceCreateInfo.pEnabledFeatures = &features;
     pDeviceCreateInfo.pNext = &features;
-    features.pNext = &feature16;
-    feature16.pNext = &features8;
+    features.pNext = &features12;
 
     if (rtxSupported)
-        features8.pNext = &featureMesh;
+        features12.pNext = &featureMesh;
 
     VkDevice device = 0;
     VK_CHECK(vkCreateDevice(physicalDevice, &pDeviceCreateInfo, 0, &device));

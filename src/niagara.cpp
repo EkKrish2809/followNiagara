@@ -1075,7 +1075,7 @@ int main(int argc, const char** argv)
 
                 vkCmdPushConstants(commandBuffers, meshProgram.layout, meshProgram.pushConstantStages, 0, sizeof(globals), &globals);
                 // vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
-                vkCmdDrawIndexedIndirectCountKHR(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
+                vkCmdDrawIndexedIndirectCount(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
             }
             vkCmdEndRenderPass(commandBuffers);
         }
@@ -1184,7 +1184,7 @@ int main(int argc, const char** argv)
 
                 vkCmdPushConstants(commandBuffers, meshProgram.layout, meshProgram.pushConstantStages, 0, sizeof(globals), &globals);
                 // vkCmdDrawIndexedIndirect(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), uint32_t(draws.size()), sizeof(MeshDrawCommand));
-                vkCmdDrawIndexedIndirectCountKHR(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
+                vkCmdDrawIndexedIndirectCount(commandBuffers, dcb.buffer, offsetof(MeshDrawCommand, indirect), dccb.buffer, 0, uint32_t(draws.size()), sizeof(MeshDrawCommand));
             }
 
             vkCmdEndRenderPass(commandBuffers);
