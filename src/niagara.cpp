@@ -165,6 +165,7 @@ struct alignas(16) Meshlet{
 
 struct alignas(16) Globals{
     glm::mat4x4 projection;
+    float frameWidth, frameHeight;
 };
 
 struct alignas(16) MeshDraw{
@@ -987,6 +988,8 @@ int main(int argc, const char** argv)
 
         Globals globals = {};
         globals.projection = projection;
+        globals.frameWidth = float(swapchain.width);
+        globals.frameHeight = float(swapchain.height);
         
         // early cull: frustum cull & fill objects that "were" visible last frame
         {
@@ -1295,8 +1298,14 @@ int main(int argc, const char** argv)
         double fps = CalcFPS();
         
         char title[256];
-        sprintf(title, "fps: %.1f; cpu: %.3f ms; gpu: %.3f ms; (cull: %.2f ms, pyramid: %.2f ms, cull_late: %.2f); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; culling: %s; level-of-details: %s",
-               fps, (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), cullGpuTime, pyramidGpuTime, culllateGpuTime, double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  meshShadingEnabled ? "ON" : "OFF", cullingEnabled ? "ON" : "OFF", lodEnabled ? "ON" : "OFF");
+        sprintf(title, "fps: %.1f; cpu: %.3f ms; gpu: %.3f ms; (cull: %.2f ms, pyramid: %.2f ms, cull_late: %.2f); triangles: %.1fM; %.2fB tri/sec, %.1fM draws/sec; mesh shading: %s; frustum culling: %s; occlusion culling: %s; level-of-details: %s",
+               fps, (frameEnd - frameBegin) , (frameGpuEnd - frameGpuBegin), 
+               cullGpuTime, pyramidGpuTime, culllateGpuTime, 
+               double(triangleCount) * 1e-6, trianglesPerSec * 1e-9, drawsPerSec * 1e-6,  
+               meshShadingEnabled ? "ON" : "OFF", 
+               cullingEnabled ? "ON" : "OFF", 
+               occlusionEnabled ? "ON" : "OFF", 
+               lodEnabled ? "ON" : "OFF");
         glfwSetWindowTitle(window, title);
     }
 

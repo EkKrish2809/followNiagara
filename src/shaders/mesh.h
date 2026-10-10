@@ -19,6 +19,7 @@ struct Meshlet{
 
 struct Globals{
     mat4 projection;
+    float frameWidth, frameHeight;
 };
 
 struct DrawCullData{
