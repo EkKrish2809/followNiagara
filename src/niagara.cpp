@@ -39,6 +39,8 @@
 bool meshShadingEnabled = true;
 bool cullingEnabled = true;
 bool lodEnabled = true;
+bool occlusionEnabled = true;
+
 bool debugPyramid = false;
 int debugPyramidLevel = 0;
 
@@ -215,9 +217,15 @@ struct Geometry{
 
 struct alignas(16) DrawCullData {
     vec4 frustum[6];
+
     uint32_t drawCount;
+    
     int cullingEnabled;
     int lodEnabled;
+    int occlusionEnabled;
+
+    float P00, P11, znear;
+    float pyramidWidth, pyramidHeight;
 };
 
 struct alignas(16) DepthReduceData {
@@ -491,13 +499,16 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         if (key == GLFW_KEY_C){
             cullingEnabled = !cullingEnabled;
         }
+        if (key == GLFW_KEY_O){
+            occlusionEnabled = !occlusionEnabled;
+        }
         if (key == GLFW_KEY_L){
             lodEnabled = !lodEnabled;
         }
         if (key == GLFW_KEY_P){
             debugPyramid = !debugPyramid;
         }
-        if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9){
+        if (debugPyramid && key >= GLFW_KEY_0 && key <= GLFW_KEY_9){
             debugPyramidLevel = key - GLFW_KEY_0;
         }
     }
@@ -967,6 +978,12 @@ int main(int argc, const char** argv)
         cullData.drawCount = drawCount;
         cullData.cullingEnabled = cullingEnabled;
         cullData.lodEnabled = lodEnabled;
+        cullData.occlusionEnabled = occlusionEnabled;
+        cullData.P00 = projection[0][0];
+        cullData.P11 = projection[1][1];
+        cullData.znear = znear;
+        cullData.pyramidWidth = float(depthPyramidWidth);
+        cullData.pyramidHeight = float(depthPyramidHeight);
 
         Globals globals = {};
         globals.projection = projection;
@@ -1118,7 +1135,9 @@ int main(int argc, const char** argv)
 
             vkCmdBindPipeline(commandBuffers, VK_PIPELINE_BIND_POINT_COMPUTE, drawculllatePipeline);
 
-            DescriptorInfo descriptors[] = {db.buffer, mb.buffer, dcb.buffer, dccb.buffer, dvb.buffer};
+            DescriptorInfo pyramidDesc(depthSampler, depthPyramid.imageView, VK_IMAGE_LAYOUT_GENERAL);
+            DescriptorInfo descriptors[] = {db.buffer, mb.buffer, dcb.buffer, dccb.buffer, dvb.buffer, pyramidDesc };
+            
             vkCmdPushDescriptorSetWithTemplateKHR(commandBuffers, drawculllateProgram.updateTemplate, drawculllateProgram.layout, 0, descriptors);
 
             vkCmdPushConstants(commandBuffers, drawculllateProgram.layout, drawculllateProgram.pushConstantStages, 0, sizeof(cullData), &cullData);

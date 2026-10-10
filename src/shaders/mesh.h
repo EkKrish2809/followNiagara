@@ -23,9 +23,14 @@ struct Globals{
 
 struct DrawCullData{
     vec4 frustum[6];
+
     uint drawCount;
     int cullingEnabled;
     int lodEnabled;
+    int occlusionEnabled;
+
+    float P00, P11, znear;
+    float pyramidWidth, pyramidHeight;
 };
 
 struct MeshLod{
